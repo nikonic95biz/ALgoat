@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { usePumpPortalConfigRevision } from "@/hooks/usePumpPortalConfigRevision";
 import { useApp } from "@/context/AppContext";
+import { getStoredSolanaRpcUrl, setStoredSolanaRpcUrl, getSolanaRpcUrl } from "@/lib/solanaRpc";
 import { PumpPortalWalletFundingBadge } from "@/components/PumpPortalWalletFundingBadge";
 import { usePumpPortalLinkedWalletSol } from "@/hooks/usePumpPortalLinkedWalletSol";
 import {
@@ -49,6 +50,7 @@ export function SetupPanel() {
   const [draftPumpKey, setDraftPumpKey] = useState(getStoredPumpPortalApiKey);
   const [draftTradingWalletSecret, setDraftTradingWalletSecret] = useState(getStoredPumpPortalTradingWalletSecret);
   const [draftLlmKey, setDraftLlmKey] = useState(model.apiKey);
+  const [draftRpcUrl, setDraftRpcUrl] = useState(getStoredSolanaRpcUrl);
   const [remoteModels, setRemoteModels] = useState<string[] | null>(null);
   const [modelsLoading, setModelsLoading] = useState(false);
 
@@ -465,6 +467,37 @@ export function SetupPanel() {
             <p className="unt-help-text mt-1.5">
               OpenRouter/OpenAI/Groq/etc. may expose extra models via <code className="font-mono text-[10px]">/v1/models</code>{" "}
               when your key is valid; otherwise you see the curated list above.
+            </p>
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-fill)] p-4 space-y-3">
+          <div>
+            <h2 className="unt-section-title">Solana RPC <span className="font-normal text-[var(--color-fg-dim)]">· optional</span></h2>
+            <p className="unt-help-text mt-2">
+              Three things call the Solana RPC: <strong className="text-[var(--color-fg-muted)]">token supply</strong> (accurate MC axis on the chart),{" "}
+              <strong className="text-[var(--color-fg-muted)]">wallet SOL balance</strong> (the balance chip in Setup), and{" "}
+              <strong className="text-[var(--color-fg-muted)]">trade confirmation</strong> (polling for buy/sell on-chain status after a Lightning trade).
+              The default public endpoint is rate-limited and blocks browser origins — paste a free{" "}
+              <a href="https://helius.dev" target="_blank" rel="noreferrer" className="font-medium text-[#2EA8FF] underline-offset-2 hover:underline">Helius</a>{" "}
+              or any mainnet RPC URL to keep all three working reliably.
+            </p>
+          </div>
+          <div>
+            <label className="unt-field-label">RPC URL</label>
+            <input
+              type="url"
+              value={draftRpcUrl}
+              onChange={(e) => {
+                setDraftRpcUrl(e.target.value);
+                setStoredSolanaRpcUrl(e.target.value);
+              }}
+              placeholder="https://mainnet.helius-rpc.com/?api-key=…"
+              className="unt-input w-full font-mono text-[12px]"
+              aria-label="Solana RPC URL"
+            />
+            <p className="unt-help-text mt-1.5">
+              Active: <span className="font-mono text-[10px] text-[var(--color-fg-muted)]">{getSolanaRpcUrl()}</span>
             </p>
           </div>
         </section>
