@@ -374,14 +374,18 @@ export function CaChartPanel() {
       return;
     }
     setScalperCutoffMs(Date.now());
-  }, [algoSessionActive, selectedAlgoId, mintLoaded, tradingMode]);
-
-  useEffect(() => {
-    if (tradingMode !== "real" || !algoSessionActive) {
+    if (tradingMode === "real") {
       setLivePumpPortalSig(null);
       setLivePumpPortalErr(null);
     }
-  }, [tradingMode, algoSessionActive]);
+  }, [algoSessionActive, selectedAlgoId, mintLoaded, tradingMode]);
+
+  useEffect(() => {
+    if (tradingMode !== "real") {
+      setLivePumpPortalSig(null);
+      setLivePumpPortalErr(null);
+    }
+  }, [tradingMode]);
 
   const paperScalper = useMemo(() => {
     if (!scalperEngineRunning || !mintLoaded || scalperCutoffMs == null) return null;
