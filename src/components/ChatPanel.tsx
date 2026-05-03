@@ -50,7 +50,6 @@ import { mergeAbortSignals } from "@/lib/mergeAbortSignals";
 import {
   githubGetFileContent,
   githubGetLatestWorkflowRun,
-  githubTriggerWorkflow,
   type WorkflowRunStatus,
 } from "@/lib/githubApi";
 import type { ChatMessage, ModelSettings } from "@/types";
@@ -301,34 +300,15 @@ function PostCommitRow({
   result,
   owner,
   repo,
-  branch,
-  token,
   onDismiss,
 }: {
   result: CommitResult;
   owner: string;
   repo: string;
-  branch: string;
-  token: string;
   onDismiss: () => void;
 }) {
-  const [deploying, setDeploying] = useState(false);
-  const [deployMsg, setDeployMsg] = useState<string | null>(null);
-
   const commitUrl = `https://github.com/${owner}/${repo}/commit/${result.sha}`;
-
-  async function triggerDeploy() {
-    setDeploying(true);
-    setDeployMsg(null);
-    try {
-      await githubTriggerWorkflow(token, owner, repo, WORKFLOW_FILE, branch);
-      setDeployMsg("Deploy triggered");
-    } catch (e) {
-      setDeployMsg(e instanceof Error ? e.message : "Deploy trigger failed");
-    } finally {
-      setDeploying(false);
-    }
-  }
+  const repoUrl = `https://github.com/${owner}/${repo}`;
 
   return (
     <div className="mt-2.5 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-[11.5px] text-[var(--color-fg-dim)]">
@@ -343,19 +323,16 @@ function PostCommitRow({
           View on GitHub <ExternalLink className="size-3" strokeWidth={1.5} />
         </a>
       ) : null}
-      {deployMsg ? (
-        <span className={deployMsg.includes("triggered") ? "text-emerald-400/80" : "text-red-400/80"}>{deployMsg}</span>
-      ) : (
-        <button
-          type="button"
-          disabled={deploying}
-          onClick={() => void triggerDeploy()}
-          className="inline-flex items-center gap-1 text-[var(--color-fg-muted)] hover:text-[var(--color-fg)] disabled:opacity-50"
-        >
-          {deploying ? <Loader2 className="size-3 animate-spin" strokeWidth={2} /> : <Rocket className="size-3" strokeWidth={1.5} />}
-          Trigger deploy
-        </button>
-      )}
+      <a
+        href={repoUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center gap-1 text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
+        title="Vercel auto-deploys when you push — connect your fork at vercel.com"
+      >
+        <Rocket className="size-3" strokeWidth={1.5} />
+        Auto-deploys on push
+      </a>
       <button type="button" onClick={onDismiss} className="ml-auto text-[var(--color-fg-dim)] hover:text-[var(--color-fg-muted)]">
         <X className="size-3.5" strokeWidth={1.5} />
       </button>
@@ -454,8 +431,6 @@ function ChatTurnSection({
                   result={commitResult}
                   owner={githubWorkspace.owner}
                   repo={githubWorkspace.repo}
-                  branch={githubWorkspace.branch || "main"}
-                  token={githubWorkspace.token}
                   onDismiss={() => onDismissCommit(asst.id)}
                 />
               ) : null}

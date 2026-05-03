@@ -47,7 +47,7 @@ import {
   appendPumpPortalTradingWalletHint,
   getEffectivePumpPortalApiKey,
 } from "@/lib/pumpPortalConfig";
-import { postPumpPortalLightningTrade } from "@/lib/pumpPortalLightningTrade";
+import { postPumpPortalLightningTrade, confirmLightningTx } from "@/lib/pumpPortalLightningTrade";
 
 /** Dark trading terminal palette (high-contrast teal up / coral down on charcoal). */
 const BG = "#0b0e11";
@@ -435,9 +435,10 @@ export function CaChartPanel() {
       prevLiveOpenRef.current = open;
 
       const R = SCALPER_PAPER_CONFIG;
+      const action = maybeBuy ? "buy" : "sell";
       void (async () => {
         const res = await postPumpPortalLightningTrade(apiKey, {
-          action: maybeBuy ? "buy" : "sell",
+          action,
           mint: mintLoaded,
           amount: maybeBuy ? scalperLiveBuySol : "100%",
           denominatedInSol: maybeBuy ? "true" : "false",
@@ -445,11 +446,21 @@ export function CaChartPanel() {
           priorityFee: R.realPriorityFeeSol,
           pool: R.realPool,
         });
-        if (res.ok) {
-          setLivePumpPortalSig(res.signature);
-          setLivePumpPortalErr(null);
-        } else {
+        if (!res.ok) {
           setLivePumpPortalErr(appendPumpPortalTradingWalletHint(res.message));
+          return;
+        }
+        // Show signature immediately so user can see it, then confirm on-chain
+        setLivePumpPortalSig(`${action.toUpperCase()} confirming… ${res.signature}`);
+        setLivePumpPortalErr(null);
+        const { confirmed, err } = await confirmLightningTx(res.signature);
+        if (confirmed) {
+          setLivePumpPortalSig(res.signature);
+        } else {
+          setLivePumpPortalSig(null);
+          setLivePumpPortalErr(
+            appendPumpPortalTradingWalletHint(err ?? "Tx did not confirm — check explorer"),
+          );
         }
       })();
       return;

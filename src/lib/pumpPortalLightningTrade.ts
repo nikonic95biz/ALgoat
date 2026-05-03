@@ -3,6 +3,53 @@
  * See https://pumpportal.fun/trading-api/ — handles Pump.fun + migrated pools (Token-2022 etc.) server-side.
  */
 
+import { getSolanaRpcUrl } from "./solanaRpc";
+
+/**
+ * Poll Solana RPC until the tx is confirmed or times out.
+ * Returns true if confirmed, false if the tx failed or wasn't found within the timeout.
+ */
+export async function confirmLightningTx(
+  signature: string,
+  timeoutMs = 20_000,
+): Promise<{ confirmed: boolean; err: string | null }> {
+  const rpcUrl = getSolanaRpcUrl();
+  const deadline = Date.now() + timeoutMs;
+  const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(rpcUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "getSignatureStatuses",
+          params: [[signature], { searchTransactionHistory: true }],
+        }),
+      });
+      const json = (await res.json()) as {
+        result?: { value?: Array<{ confirmationStatus?: string; err: unknown } | null> };
+      };
+      const status = json.result?.value?.[0];
+      if (status !== undefined && status !== null) {
+        if (status.err !== null && status.err !== undefined) {
+          return { confirmed: false, err: `Tx failed on-chain: ${JSON.stringify(status.err)}` };
+        }
+        const lvl = status.confirmationStatus;
+        if (lvl === "confirmed" || lvl === "finalized") {
+          return { confirmed: true, err: null };
+        }
+      }
+    } catch {
+      // RPC blip — retry
+    }
+    await delay(1500);
+  }
+  return { confirmed: false, err: "Tx not confirmed within timeout — check explorer" };
+}
+
 export type PumpPortalLightningTradeBody = {
   action: "buy" | "sell";
   mint: string;
