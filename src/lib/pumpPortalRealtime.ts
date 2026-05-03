@@ -60,11 +60,6 @@ let lastMessageAt = 0;
 let healthTimer: ReturnType<typeof setInterval> | null = null;
 const HEALTH_CHECK_INTERVAL_MS = 10_000;
 const SILENCE_THRESHOLD_MS = 45_000;
-// Track rapid consecutive failures — if the key is rejected (403→1006) we back off hard
-let rapidFailCount = 0;
-let lastFailAt = 0;
-const RAPID_FAIL_WINDOW_MS = 8_000;
-const MAX_RAPID_FAILS = 3;
 
 function mintsWithListeners(): string[] {
   return [...handlersByMint.entries()]
@@ -277,7 +272,6 @@ function stopHealthCheck() {
 function attachHandlers(socket: WebSocket) {
   socket.onopen = () => {
     reconnectAttempt = 0;
-    rapidFailCount = 0;
     lastMessageAt = Date.now();
     const keys = mintsWithListeners();
     if (keys.length) sendWhenOpen({ method: "subscribeTokenTrade", keys });
@@ -306,25 +300,10 @@ function attachHandlers(socket: WebSocket) {
   };
 
   socket.onerror = () => {
-    // Browser doesn't expose HTTP status in WS error events.
-    // A 403 manifests as immediate onerror → onclose (code 1006).
-    // We track rapid failures to detect a rejected key and back off.
-    const now = Date.now();
-    if (now - lastFailAt < RAPID_FAIL_WINDOW_MS) {
-      rapidFailCount += 1;
-    } else {
-      rapidFailCount = 1;
-    }
-    lastFailAt = now;
-
-    if (rapidFailCount >= MAX_RAPID_FAILS) {
-      emitServerError(
-        "PumpPortal WebSocket rejected (403) — API key may be invalid or revoked. Check your key in Setup.",
-      );
-    }
+    // onerror fires before onclose — nothing to do here, onclose handles reconnect
   };
 
-  socket.onclose = (ev) => {
+  socket.onclose = () => {
     // Only clear the module-level reference if this is still the current socket.
     // A newer socket may already be assigned (health-check or manual refresh race).
     if (ws === socket) ws = null;
@@ -333,12 +312,9 @@ function attachHandlers(socket: WebSocket) {
       stopHealthCheck();
       return;
     }
-    // If key is being rejected (rapid 1006 failures), back off for 30s before retrying
-    const isRapidFail = rapidFailCount >= MAX_RAPID_FAILS && ev.code === 1006;
-    const delay = isRapidFail
-      ? 30_000
-      : Math.min(1_200 * 2 ** reconnectAttempt, 15_000);
-    if (!isRapidFail) reconnectAttempt += 1;
+    // Exponential backoff capped at 15s — keeps reconnecting forever as long as something's subscribed
+    const delay = Math.min(1_200 * 2 ** reconnectAttempt, 15_000);
+    reconnectAttempt += 1;
     setTimeout(() => ensureSocket(), delay);
   };
 }
