@@ -275,6 +275,7 @@ export function CaChartPanel() {
     rows: liveRows,
     state: liveState,
     error: liveErr,
+    lastTradeAt: liveLastTradeAt,
   } = usePumpPortalTrades(streamMint, 200);
 
   const bucketSec = chartIntervalBucketSec(chartInterval);
@@ -481,6 +482,7 @@ export function CaChartPanel() {
       tokenSupplyUi: mintLoaded ? tokenUiSupply : null,
       orderBookConn: liveState,
       orderBookError: liveErr,
+      orderBookLastTradeAt: liveLastTradeAt,
       paperScalper,
       livePumpPortalLastSig: livePumpPortalSig,
       livePumpPortalLastErr: livePumpPortalErr,
@@ -497,6 +499,7 @@ export function CaChartPanel() {
     tokenUiSupply,
     liveState,
     liveErr,
+    liveLastTradeAt,
     paperScalper,
     livePumpPortalSig,
     livePumpPortalErr,

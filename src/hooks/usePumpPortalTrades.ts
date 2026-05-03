@@ -182,6 +182,7 @@ export function usePumpPortalTrades(mint: string | null, maxRows = 80) {
   const [rows, setRows] = useState<PumpPortalLiveRow[]>([]);
   const [state, setState] = useState<ConnState>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [lastTradeAt, setLastTradeAt] = useState<number | null>(null);
   const solUsdRef = useRef(150);
   const synthSeqRef = useRef(0);
 
@@ -205,6 +206,7 @@ export function usePumpPortalTrades(mint: string | null, maxRows = 80) {
   useEffect(() => {
     setRows([]);
     setError(null);
+    setLastTradeAt(null);
     synthSeqRef.current = 0;
     if (!mintKey) {
       setState("idle");
@@ -259,6 +261,7 @@ export function usePumpPortalTrades(mint: string | null, maxRows = 80) {
           const next = [row, ...prev.filter((r) => r.id !== row.id)];
           return next.slice(0, maxRows);
         });
+        setLastTradeAt(Date.now());
       }
     });
 
@@ -270,5 +273,5 @@ export function usePumpPortalTrades(mint: string | null, maxRows = 80) {
     };
   }, [mintKey, maxRows]);
 
-  return { rows, state, error };
+  return { rows, state, error, lastTradeAt };
 }

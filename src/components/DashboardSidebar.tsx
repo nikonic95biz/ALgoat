@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { BotTradesBook } from "@/components/BotTradesBook";
 import { InlineToolbarPicker } from "@/components/InlineToolbarPicker";
+import { StreamHealthBanner } from "@/components/StreamHealthBanner";
 import { Tooltip } from "@/components/Tooltip";
 import { useApp, type TradingMode } from "@/context/AppContext";
 import { BUILTIN_SCALPER_PRESET_ID } from "@/lib/algorithmPresets";
@@ -133,6 +134,17 @@ function AnalyticsPanel() {
               placeholder="Choose an algo…"
               aria-label="Algorithm preset"
             />
+
+            {chartAnalytics.mint ? (
+              <div className="mt-3">
+                <StreamHealthBanner
+                  mint={chartAnalytics.mint}
+                  orderBookConn={chartAnalytics.orderBookConn}
+                  orderBookError={chartAnalytics.orderBookError}
+                  orderBookLastTradeAt={chartAnalytics.orderBookLastTradeAt}
+                />
+              </div>
+            ) : null}
 
             {selectedAlgoId === BUILTIN_SCALPER_PRESET_ID ? (
               <div className="mt-3">

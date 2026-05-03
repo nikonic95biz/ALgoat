@@ -178,6 +178,8 @@ export type ChartAnalyticsState = {
   tokenSupplyUi: number | null;
   orderBookConn: "idle" | "connecting" | "open" | "closed" | "error";
   orderBookError: string | null;
+  /** When the last trade for the active mint arrived (ms epoch). null = never. */
+  orderBookLastTradeAt: number | null;
   /** Paper Scalper sim fed by the order-book stream (chart panel); null when inactive. */
   paperScalper: ScalperPaperSnapshot | null;
   /** Closed round-trips from real execution (reserved for future local-signing path). */
@@ -199,6 +201,7 @@ const defaultChartAnalytics: ChartAnalyticsState = {
   tokenSupplyUi: null,
   orderBookConn: "idle",
   orderBookError: null,
+  orderBookLastTradeAt: null,
   paperScalper: null,
   realBotTrades: [],
   livePumpPortalLastSig: null,
