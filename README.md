@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="public/solclaw-logo.png" alt="SolClaw" width="80" />
+</p>
+
 # SolClaw
 
 **The algo trading IDE for Solana memecoins.**
