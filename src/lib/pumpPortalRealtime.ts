@@ -58,8 +58,8 @@ let disconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempt = 0;
 let lastMessageAt = 0;
 let healthTimer: ReturnType<typeof setInterval> | null = null;
-const HEALTH_CHECK_INTERVAL_MS = 15_000;
-const SILENCE_THRESHOLD_MS = 90_000;
+const HEALTH_CHECK_INTERVAL_MS = 10_000;
+const SILENCE_THRESHOLD_MS = 45_000;
 
 function mintsWithListeners(): string[] {
   return [...handlersByMint.entries()]
@@ -245,21 +245,19 @@ function startHealthCheck() {
   if (healthTimer) return;
   healthTimer = setInterval(() => {
     if (!hasAnyListeners()) return;
-    if (ws?.readyState !== WebSocket.OPEN) {
-      // Connection dropped without firing onclose (rare but happens) — recover
+    const state = ws?.readyState;
+    // CLOSED or null — onclose may not have fired (rare browser/network bug), nudge reconnect
+    if (state == null || state === WebSocket.CLOSED) {
+      ws = null;
       ensureSocket();
       return;
     }
-    // PumpPortal idles closed sockets without a frame; if we've been quiet too long, hard-reset
+    // CONNECTING or CLOSING — already in transition, do nothing
+    if (state !== WebSocket.OPEN) return;
+    // Socket is OPEN but PumpPortal went silent — close it so onclose handles reconnect
     if (lastMessageAt > 0 && Date.now() - lastMessageAt > SILENCE_THRESHOLD_MS) {
-      try {
-        ws.close();
-      } catch {
-        /* ignore */
-      }
-      ws = null;
-      emitConnection(false);
-      ensureSocket();
+      try { ws?.close(); } catch { /* ignore */ }
+      // Don't null ws or call ensureSocket here — onclose will do both cleanly
     }
   }, HEALTH_CHECK_INTERVAL_MS);
 }
@@ -304,7 +302,9 @@ function attachHandlers(socket: WebSocket) {
   socket.onerror = () => {};
 
   socket.onclose = () => {
-    ws = null;
+    // Only clear the module-level reference if this is still the current socket.
+    // A newer socket may already be assigned (health-check or manual refresh race).
+    if (ws === socket) ws = null;
     emitConnection(false);
     if (!hasAnyListeners()) {
       stopHealthCheck();
