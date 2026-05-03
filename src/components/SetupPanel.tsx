@@ -342,7 +342,7 @@ export function SetupPanel() {
               href={PORTAL_SETUP_URL}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-[var(--color-keyword)] underline-offset-2 hover:underline"
+              className="font-medium text-[#2EA8FF] underline underline-offset-2 hover:brightness-125"
             >
               pumpportal.fun/trading-api/setup ↗
             </a>
