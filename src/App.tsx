@@ -4,10 +4,23 @@ import { TradingWorkspace } from "@/components/TradingWorkspace";
 import { AppProvider } from "@/context/AppContext";
 import { homePath, isWorkspacePath, workspacePath } from "@/lib/siteUrls";
 
+function isLocalhost(): boolean {
+  if (typeof window === "undefined") return false;
+  const h = window.location.hostname;
+  return h === "localhost" || h === "127.0.0.1" || h === "0.0.0.0" || h.endsWith(".local");
+}
+
 export default function App() {
-  const [pathname, setPathname] = useState(
-    () => (typeof window !== "undefined" ? window.location.pathname : "/"),
-  );
+  const [pathname, setPathname] = useState(() => {
+    if (typeof window === "undefined") return "/";
+    // When running locally (fork / npm run dev) skip the landing page entirely
+    if (isLocalhost() && !isWorkspacePath(window.location.pathname)) {
+      const wp = workspacePath();
+      window.history.replaceState({}, "", wp);
+      return wp;
+    }
+    return window.location.pathname;
+  });
 
   useEffect(() => {
     const sync = () => setPathname(window.location.pathname);

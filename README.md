@@ -8,6 +8,7 @@
 
 Write, test, and deploy trading algorithms directly in the browser. The AI assistant has native access to your live dashboard state, real-time order-book data, and full codebase — propose a strategy change, see the diff, commit to your fork, and watch it run. No backend, no signup, keys stay local.
 
+[![Open App](https://img.shields.io/badge/Open_App-enrich.fun-2EA8FF?style=for-the-badge)](https://enrich.fun/solclaw/app)
 [![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 ---
