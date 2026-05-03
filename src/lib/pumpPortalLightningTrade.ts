@@ -3,7 +3,7 @@
  * See https://pumpportal.fun/trading-api/ — handles Pump.fun + migrated pools (Token-2022 etc.) server-side.
  */
 
-import { getSolanaRpcUrl } from "./solanaRpc";
+import { fetchSolanaRpc } from "./solanaRpc";
 
 /**
  * Poll Solana RPC until the tx is confirmed or times out.
@@ -13,21 +13,16 @@ export async function confirmLightningTx(
   signature: string,
   timeoutMs = 20_000,
 ): Promise<{ confirmed: boolean; err: string | null }> {
-  const rpcUrl = getSolanaRpcUrl();
   const deadline = Date.now() + timeoutMs;
   const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(rpcUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "getSignatureStatuses",
-          params: [[signature], { searchTransactionHistory: true }],
-        }),
+      const res = await fetchSolanaRpc({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "getSignatureStatuses",
+        params: [[signature], { searchTransactionHistory: true }],
       });
       const json = (await res.json()) as {
         result?: { value?: Array<{ confirmationStatus?: string; err: unknown } | null> };

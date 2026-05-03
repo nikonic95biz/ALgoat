@@ -1,6 +1,6 @@
 /** SPL mint `getTokenSupply` → human token amount (RPC `uiAmount`). */
 
-import { getSolanaRpcUrl } from "@/lib/solanaRpc";
+import { fetchSolanaRpc } from "@/lib/solanaRpc";
 
 type RpcSupplyResult = {
   jsonrpc: string;
@@ -23,20 +23,7 @@ export async function fetchTokenUiSupply(mint: string): Promise<number | null> {
   const m = mint.trim();
   if (!m) return null;
   try {
-    const ac = new AbortController();
-    const t = window.setTimeout(() => ac.abort(), 8000);
-    const res = await fetch(getSolanaRpcUrl(), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "getTokenSupply",
-        params: [m],
-      }),
-      signal: ac.signal,
-    });
-    window.clearTimeout(t);
+    const res = await fetchSolanaRpc({ jsonrpc: "2.0", id: 1, method: "getTokenSupply", params: [m] });
     if (!res.ok) return null;
     const data = (await res.json()) as RpcSupplyResult & { error?: unknown };
     if (data.error != null) return null;

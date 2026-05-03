@@ -1,4 +1,4 @@
-import { getSolanaRpcUrl } from "@/lib/solanaRpc";
+import { fetchSolanaRpc } from "@/lib/solanaRpc";
 
 /** Loose Solana address shape (base58); same heuristic as mint inputs elsewhere. */
 const ADDR_LIKELY = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
@@ -19,20 +19,7 @@ export async function fetchNativeSolBalance(pubkey: string): Promise<number | nu
   const pk = pubkey.trim();
   if (!pk) return null;
   try {
-    const ac = new AbortController();
-    const t = window.setTimeout(() => ac.abort(), 8000);
-    const res = await fetch(getSolanaRpcUrl(), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "getBalance",
-        params: [pk],
-      }),
-      signal: ac.signal,
-    });
-    window.clearTimeout(t);
+    const res = await fetchSolanaRpc({ jsonrpc: "2.0", id: 1, method: "getBalance", params: [pk] });
     if (!res.ok) return null;
     const data = (await res.json()) as RpcBalance;
     if (data.error != null) return null;
