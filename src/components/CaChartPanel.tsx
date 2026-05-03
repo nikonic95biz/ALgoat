@@ -18,6 +18,7 @@ import type {
   UTCTimestamp,
 } from "lightweight-charts";
 import { PumpOrderBook } from "@/components/PumpOrderBook";
+import { TokenInfoBar } from "@/components/TokenInfoBar";
 import { useApp, type ChartCandleBarSummary, type ChartTapeSummary } from "@/context/AppContext";
 import { usePumpPortalTrades } from "@/hooks/usePumpPortalTrades";
 import { BUILTIN_SCALPER_PRESET_ID } from "@/lib/algorithmPresets";
@@ -812,6 +813,8 @@ export function CaChartPanel() {
           </div>
         </div>
       </div>
+
+      <TokenInfoBar mint={streamMint} />
 
       {error ? (
         <div className="shrink-0 border-b border-[var(--color-border)] px-4 py-2 text-[14px] text-[var(--color-danger)]">

@@ -1,7 +1,6 @@
 import type { CandlestickData, UTCTimestamp } from "lightweight-charts";
 import type { PumpPortalLiveRow } from "@/hooks/usePumpPortalTrades";
 import { fetchTokenUiSupply } from "@/lib/solanaTokenSupply";
-import { browserLlmProxyEnabled } from "@/lib/llmDevProxy";
 
 /**
  * Legacy pump UI / PumpPortal MC convention (price × 1e9) when on-chain supply is unavailable.
@@ -177,21 +176,17 @@ export async function fetchPumpCandles(
     PUMP_CANDLES_MAX_LIMIT,
   );
 
-  // On localhost use the Vite same-origin proxy (no CORS); everywhere else go direct.
+  // Always use same-origin /pump-api path — on localhost this hits the Vite proxy,
+  // on Vercel it hits the rewrite rule that proxies to swap-api.pump.fun.
+  // VITE_PUMP_API_PREFIX overrides for self-hosters with a custom proxy.
   const envPrefix = (import.meta.env.VITE_PUMP_API_PREFIX as string | undefined)?.trim();
-  const apiPrefix = envPrefix
-    ? envPrefix
-    : browserLlmProxyEnabled()
-      ? "/pump-api"
-      : "https://swap-api.pump.fun";
+  const apiPrefix = envPrefix ?? "/pump-api";
   const base = `${apiPrefix}/v2/coins/${encodeURIComponent(id)}/candles`;
 
   let lastMessage = `No candle data for this mint at ${interval}.`;
 
   for (const program of DEFAULT_PROGRAMS) {
-    const url = apiPrefix.startsWith("http")
-      ? new URL(base)
-      : new URL(base, window.location.origin);
+    const url = new URL(base, window.location.origin);
     url.searchParams.set("interval", interval);
     url.searchParams.set("limit", String(limit));
     url.searchParams.set("currency", "USD");
