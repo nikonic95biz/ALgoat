@@ -62,7 +62,7 @@ Open **Setup** (key icon in the nav) and add:
 
 This repo ships a `vercel.json` configured for the `/solclaw` base path (matching [enrich.fun/solclaw](https://enrich.fun/solclaw)).
 
-1. Import `enrichthetrenches/solclaw` at [vercel.com/new](https://vercel.com/new).
+1. Import `Enrichfun/solclaw` at [vercel.com/new](https://vercel.com/new).
 2. Vercel picks up `vercel.json` automatically — build command, output dir, and env vars are pre-configured.
 3. Add your domain under **Settings → Domains**.
 

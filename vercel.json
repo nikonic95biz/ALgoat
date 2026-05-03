@@ -4,8 +4,8 @@
   "framework": "vite",
   "env": {
     "VITE_BASE_PATH": "solclaw",
-    "VITE_GITHUB_REPO_URL": "https://github.com/enrichthetrenches/solclaw",
-    "VITE_GITHUB_UPSTREAM_OWNER": "enrichthetrenches",
+    "VITE_GITHUB_REPO_URL": "https://github.com/Enrichfun/solclaw",
+    "VITE_GITHUB_UPSTREAM_OWNER": "Enrichfun",
     "VITE_GITHUB_UPSTREAM_REPO": "solclaw"
   },
   "redirects": [
