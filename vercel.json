@@ -1,0 +1,25 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "framework": "vite",
+  "env": {
+    "VITE_BASE_PATH": "solclaw"
+  },
+  "redirects": [
+    { "source": "/", "destination": "/solclaw", "permanent": false }
+  ],
+  "rewrites": [
+    { "source": "/solclaw", "destination": "/solclaw/index.html" },
+    { "source": "/solclaw/(.*)", "destination": "/solclaw/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+      ]
+    }
+  ]
+}

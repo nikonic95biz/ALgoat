@@ -1,0 +1,47 @@
+{
+  "name": "unknown-name-trader",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Open-source browser-based trading workspace for Pump.fun / Solana tokens — chart, order-book, paper scalper, LLM assistant, in-browser IDE (bundled snapshot; optional GitHub push).",
+  "keywords": [
+    "solana",
+    "pumpfun",
+    "trading",
+    "react",
+    "vite",
+    "paper-trading",
+    "memecoin"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "predev": "node scripts/bundle-workspace.mjs",
+    "prebuild": "node scripts/bundle-workspace.mjs",
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview",
+    "bundle-workspace": "node scripts/bundle-workspace.mjs"
+  },
+  "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
+    "@solana/web3.js": "^1.98.4",
+    "bs58": "^6.0.0",
+    "lightweight-charts": "^5.2.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "react-resizable-panels": "^2.1.7",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4.0.0",
+    "typescript": "~5.7.2",
+    "vite": "^6.0.0"
+  }
+}
