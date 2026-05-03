@@ -418,8 +418,10 @@ export function CaChartPanel() {
     const maybeSell = prev && !open;
 
     if (maybeBuy || maybeSell) {
-      if (now - lastLiveTxAtRef.current < minGap) {
-        prevLiveOpenRef.current = open;
+      // Debounce buys only — never skip a sell, or we end up holding an
+      // untracked position and keep re-buying on every new entry signal.
+      if (maybeBuy && now - lastLiveTxAtRef.current < minGap) {
+        // Don't advance prevLiveOpenRef so this buy is retried next tick.
         return;
       }
       if (!apiKey) {
