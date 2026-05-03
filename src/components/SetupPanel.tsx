@@ -21,7 +21,7 @@ import {
   inferLlmBackendIdFromApiKey,
 } from "@/lib/llmBackends";
 import { fetchOpenAiCompatibleModelList } from "@/lib/fetchLlmModels";
-import { githubForkUpstreamIntoViewerAccount, githubGetViewerLogin } from "@/lib/githubApi";
+import { githubForkUpstreamIntoViewerAccount } from "@/lib/githubApi";
 import { getDefaultGithubUpstream } from "@/lib/githubUpstreamDefaults";
 import { computeSetupSteps } from "@/lib/setupProgress";
 
@@ -240,23 +240,6 @@ export function SetupPanel() {
     });
   };
 
-  async function githubAssistDetectLogin() {
-    const t = githubWorkspace.token.trim();
-    if (!t) {
-      setGithubAssistErr("Paste a PAT first.");
-      return;
-    }
-    setGithubAssistErr(null);
-    setGithubAssistBusy("login");
-    try {
-      const login = await githubGetViewerLogin(t);
-      setGithubWorkspace({ owner: login });
-    } catch (e) {
-      setGithubAssistErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setGithubAssistBusy(null);
-    }
-  }
 
   async function githubAssistForkConnect() {
     const t = githubWorkspace.token.trim();
@@ -532,73 +515,13 @@ export function SetupPanel() {
             <span className="font-mono text-[10px]">VITE_GITHUB_UPSTREAM_OWNER</span> /{" "}
             <span className="font-mono text-[10px]">VITE_GITHUB_UPSTREAM_REPO</span>.
           </p>
-          {githubWorkspace.owner.trim() &&
-          githubWorkspace.repo.trim() &&
-          githubWorkspace.branch.trim() ? (
-            <p className="unt-callout font-mono text-[12px]">
-              Code sidebar →{" "}
-              <span className="text-[var(--color-keyword)]">
-                {githubWorkspace.owner}/{githubWorkspace.repo}
-              </span>{" "}
-              @ <span className="text-[var(--color-fg)]">{githubWorkspace.branch}</span>
+          {githubAssistErr ? <p className="unt-help-text font-medium text-red-400/90">{githubAssistErr}</p> : null}
+          {githubWorkspace.owner.trim() && githubWorkspace.repo.trim() ? (
+            <p className="unt-help-text text-emerald-400/80">
+              ✓ Connected to {githubWorkspace.owner}/{githubWorkspace.repo}
             </p>
           ) : null}
-          {githubAssistErr ? <p className="unt-help-text font-medium text-red-400/90">{githubAssistErr}</p> : null}
-
-          <details className="rounded-lg border border-[var(--color-border-subtle)] [&_summary::-webkit-details-marker]:hidden">
-            <summary className="cursor-pointer list-none px-3 py-2.5 text-[12px] font-semibold text-[var(--color-fg-heading)] hover:text-[var(--color-fg)]">
-              Manual overrides (different fork name / branch)
-            </summary>
-            <div className="space-y-3 border-t border-[var(--color-border-subtle)] px-3 pb-3 pt-3">
-              <button
-                type="button"
-                disabled={!githubWorkspace.token.trim() || githubAssistBusy !== null}
-                onClick={() => void githubAssistDetectLogin()}
-                className="w-full rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-fill)] px-4 py-2 text-[13px] font-medium text-[var(--color-fg)] hover:bg-[var(--color-fill-hover)] disabled:opacity-50"
-              >
-                {githubAssistBusy === "login" ? (
-                  <span className="inline-flex items-center justify-center gap-2">
-                    <Loader2 className="size-4 animate-spin" aria-hidden />
-                    Checking token…
-                  </span>
-                ) : (
-                  "Fill Owner only from token"
-                )}
-              </button>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="unt-field-label">Owner</label>
-                  <input
-                    value={githubWorkspace.owner}
-                    onChange={(e) => setGithubWorkspace({ owner: e.target.value })}
-                    placeholder="your-github-login"
-                    className="unt-input w-full font-mono text-[13px]"
-                    aria-label="GitHub repository owner"
-                  />
-                </div>
-                <div>
-                  <label className="unt-field-label">Repo</label>
-                  <input
-                    value={githubWorkspace.repo}
-                    onChange={(e) => setGithubWorkspace({ repo: e.target.value })}
-                    placeholder={upstreamForkTarget.repo}
-                    className="unt-input w-full font-mono text-[13px]"
-                    aria-label="GitHub repository name"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="unt-field-label">Branch</label>
-                <input
-                  value={githubWorkspace.branch}
-                  onChange={(e) => setGithubWorkspace({ branch: e.target.value })}
-                  placeholder="main"
-                  className="unt-input w-full font-mono text-[13px]"
-                  aria-label="Git branch"
-                />
-              </div>
-            </div>
-          </details>
+          
         </section>
       </div>
     </div>
