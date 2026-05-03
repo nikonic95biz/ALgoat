@@ -15,6 +15,7 @@
     { "source": "/pump-api/:path*", "destination": "https://swap-api.pump.fun/:path*" },
     { "source": "/pump-frontend/:path*", "destination": "https://frontend-api.pump.fun/:path*" },
     { "source": "/dex-api/:path*", "destination": "https://api.dexscreener.com/:path*" },
+    { "source": "/sol-rpc", "destination": "https://api.mainnet-beta.solana.com/" },
     { "source": "/solclaw", "destination": "/solclaw/index.html" },
     { "source": "/solclaw/(.*)", "destination": "/solclaw/index.html" }
   ],

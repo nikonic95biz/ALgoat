@@ -22,6 +22,20 @@ const pumpFrontendProxy = {
   rewrite: (p: string) => p.replace(/^\/pump-frontend/, ""),
 } as const;
 
+const dexscreenerProxy = {
+  target: "https://api.dexscreener.com",
+  changeOrigin: true,
+  secure: true,
+  rewrite: (p: string) => p.replace(/^\/dex-api/, ""),
+} as const;
+
+const solanaRpcProxy = {
+  target: "https://api.mainnet-beta.solana.com",
+  changeOrigin: true,
+  secure: true,
+  rewrite: (p: string) => p.replace(/^\/sol-rpc/, "/"),
+} as const;
+
 const LLM_PROXY_TARGETS: Record<string, string> = {
   openai: "https://api.openai.com",
   anthropic: "https://api.anthropic.com",
@@ -180,12 +194,16 @@ export default defineConfig({
     proxy: {
       "/pump-api": pumpProxy,
       "/pump-frontend": pumpFrontendProxy,
+      "/dex-api": dexscreenerProxy,
+      "/sol-rpc": solanaRpcProxy,
     },
   },
   preview: {
     proxy: {
       "/pump-api": pumpProxy,
       "/pump-frontend": pumpFrontendProxy,
+      "/dex-api": dexscreenerProxy,
+      "/sol-rpc": solanaRpcProxy,
     },
   },
   resolve: {
