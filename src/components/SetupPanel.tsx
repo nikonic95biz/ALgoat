@@ -337,17 +337,16 @@ export function SetupPanel() {
             </p>
           ) : null}
           <p className="unt-body-text">
-            PumpPortal gives you a wallet for trades — docs suggest keeping around{" "}
-            <span className="text-[var(--color-fg)]">~0.02 SOL</span> there for full streams; empty tape can still be API key,
-            mint, or message-shape issues (not only balance). Your key is saved in this browser as you type.{" "}
+            Get your API key and trading wallet at{" "}
             <a
               href={PORTAL_SETUP_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="text-[var(--color-keyword)] underline-offset-2 hover:underline"
             >
-              top up on PumpPortal ↗
+              pumpportal.fun/trading-api/setup ↗
             </a>
+            . Keep ~0.02 SOL there for live streams.
           </p>
           <div className={setupStepWrapClass(portalApiComplete)}>
             <label className="unt-field-label">PumpPortal API key</label>
@@ -384,10 +383,7 @@ export function SetupPanel() {
               </p>
             ) : null}
             <p className="unt-help-text mt-1.5">
-              Stored only in this browser. We derive your public address for{" "}
-              <span className="text-[var(--color-fg-muted)]">getBalance</span> via your RPC (
-              <code className="font-mono text-[10px]">VITE_SOLANA_RPC_URL</code> or mainnet default). PumpPortal Lightning
-              trades still execute from the wallet linked to your API key on PumpPortal — use the same keypair there.
+              Stored in this browser only. Use the same keypair you linked on PumpPortal — Lightning trades execute from that wallet.
             </p>
           </div>
           <p className="unt-help-text mt-2 border-t border-[var(--color-border-subtle)] pt-3 font-mono text-[10px] leading-relaxed text-[var(--color-fg-dim)]">

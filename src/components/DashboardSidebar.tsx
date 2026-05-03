@@ -243,22 +243,24 @@ function AnalyticsPanel() {
                     ? "Stop the current trading session immediately"
                     : !canRunBundledScalper
                       ? "Select the Order-book scalper preset first"
-                      : tradingMode === "real"
-                        ? "Start live trading — uses your PumpPortal wallet"
-                        : "Start paper trading — no real money used"
+                      : !chartAnalytics.mint
+                        ? "Paste a token CA in the Chart tab first"
+                        : tradingMode === "real"
+                          ? "Start live trading — uses your PumpPortal wallet"
+                          : "Start paper trading — no real money used"
                 }
                 side="top"
               >
               <button
                 type="button"
                 className="unt-btn-primary shrink-0 px-4 py-2 text-[13px] font-medium"
-                disabled={!algoSessionActive && !canRunBundledScalper}
+                disabled={!algoSessionActive && (!canRunBundledScalper || !chartAnalytics.mint)}
                 onClick={() => {
                   if (algoSessionActive) {
                     hardStopTrading();
                     return;
                   }
-                  if (!canRunBundledScalper) return;
+                  if (!canRunBundledScalper || !chartAnalytics.mint) return;
                   if (tradingMode === "real" && !getEffectivePumpPortalApiKey().trim()) {
                     setTradingNotice(
                       appendPumpPortalTradingWalletHint(
@@ -279,7 +281,11 @@ function AnalyticsPanel() {
               <p className="unt-help-text whitespace-pre-wrap font-medium text-amber-400/90">{tradingNotice}</p>
             ) : (
               <p className="unt-help-text">
-                Real mode needs a funded PumpPortal wallet (Setup). Chart uses the same Start/Stop.
+                {!chartAnalytics.mint
+                  ? "Paste a token CA in Chart to enable Start."
+                  : tradingMode === "real"
+                    ? "Real mode needs a funded PumpPortal wallet in Setup."
+                    : "Paper mode — no real money used."}
               </p>
             )}
             {!algoSessionActive && !canRunBundledScalper && selectedAlgoId != null ? (
