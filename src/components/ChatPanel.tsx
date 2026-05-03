@@ -409,31 +409,31 @@ function ChatTurnSection({
           style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)" }}
         >
           <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--color-fg)]">
-            {turn.user.content}
-          </p>
+          {turn.user.content}
+        </p>
         </div>
       </div>
 
       {/* Assistant reply */}
-      {asst ? (
-        <div className="group/resp relative">
-          {asst.content.length > 0 ? (
-            <button
-              type="button"
-              title="Copy"
-              onClick={() => void onCopy(asst.id, asst.content)}
+        {asst ? (
+          <div className="group/resp relative">
+            {asst.content.length > 0 ? (
+              <button
+                type="button"
+                title="Copy"
+                onClick={() => void onCopy(asst.id, asst.content)}
               className="absolute right-0 top-0 z-[20] rounded-md p-1 text-[var(--color-fg-dim)] opacity-0 transition-opacity hover:bg-[var(--color-fill)] hover:text-[var(--color-fg-muted)] group-hover/resp:opacity-100"
             >
               {copiedId === asst.id ? <Check className="size-3.5" strokeWidth={2} /> : <Copy className="size-3.5" strokeWidth={2} />}
-            </button>
-          ) : null}
+              </button>
+            ) : null}
 
           {asst.content.trim() === "" && pending && isLatestTurn ? (
             <div className="flex items-center gap-2 py-1 text-[12px] text-[var(--color-fg-dim)]">
               <Loader2 className="size-3.5 animate-spin" strokeWidth={2} />
               <span>Connecting…</span>
-            </div>
-          ) : (
+              </div>
+            ) : (
             <>
               <Prose content={cleanContent || asst.content} />
               <MintLoadButtons
@@ -460,14 +460,14 @@ function ChatTurnSection({
                 />
               ) : null}
             </>
-          )}
-        </div>
-      ) : pending && isLatestTurn ? (
+            )}
+          </div>
+        ) : pending && isLatestTurn ? (
         <div className="flex items-center gap-2 py-1 text-[12px] text-[var(--color-fg-dim)]">
           <Loader2 className="size-3.5 animate-spin" strokeWidth={2} />
           <span>Connecting…</span>
-        </div>
-      ) : null}
+          </div>
+        ) : null}
     </section>
   );
 }
@@ -961,11 +961,11 @@ export function ChatPanel() {
       let res: Response;
       try {
         res = await fetch(url, {
-          method: "POST",
-          headers,
+        method: "POST",
+        headers,
           signal: mergeAbortSignals(abort.signal, oadl.signal),
           body: JSON.stringify({ model: model.model, stream: true, messages: [{ role: "system", content: systemContent }, ...history] }),
-        });
+      });
       } finally {
         window.clearTimeout(oadlTid);
       }
@@ -1262,10 +1262,10 @@ export function ChatPanel() {
                 <CircleStop className="size-3.5" strokeWidth={2} />
               </button>
             ) : (
-              <button
-                type="button"
+            <button
+              type="button"
                 disabled={!input.trim()}
-                onClick={() => void send()}
+              onClick={() => void send()}
                 title="Send"
                 className="flex size-7 shrink-0 items-center justify-center rounded-full bg-[var(--color-fg-dim)] text-[var(--color-bg-editor)] transition-all hover:bg-[var(--color-fg-muted)] disabled:opacity-25"
               >

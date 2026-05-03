@@ -109,9 +109,11 @@ export function AppTopChrome() {
         >
           <a
             href={homePath()}
-            className="truncate text-[13px] font-semibold tracking-[0.02em] text-[color-mix(in_srgb,var(--color-fg)_78%,#2EA8FF_22%)] drop-shadow-[0_0_14px_rgba(46,168,255,0.12)] transition-opacity hover:opacity-90 pointer-events-auto"
+            className="inline-flex items-center gap-1.5 truncate text-[13px] font-semibold tracking-[0.02em] text-[color-mix(in_srgb,var(--color-fg)_78%,#2EA8FF_22%)] drop-shadow-[0_0_14px_rgba(46,168,255,0.12)] transition-opacity hover:opacity-80 pointer-events-auto"
             style={noDrag}
+            title="Back to home"
           >
+            <img src="/solclaw-logo.png" alt="" className="h-4 w-4 object-contain opacity-80" />
             SolClaw
           </a>
         </div>
