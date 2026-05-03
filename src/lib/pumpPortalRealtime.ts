@@ -55,6 +55,11 @@ export function subscribePumpPortalServerErrors(
 
 let ws: WebSocket | null = null;
 let disconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectAttempt = 0;
+let lastMessageAt = 0;
+let healthTimer: ReturnType<typeof setInterval> | null = null;
+const HEALTH_CHECK_INTERVAL_MS = 15_000;
+const SILENCE_THRESHOLD_MS = 90_000;
 
 function mintsWithListeners(): string[] {
   return [...handlersByMint.entries()]
@@ -236,15 +241,49 @@ function dispatchIncomingParsed(parsed: unknown) {
   dispatchTradePayload(o);
 }
 
+function startHealthCheck() {
+  if (healthTimer) return;
+  healthTimer = setInterval(() => {
+    if (!hasAnyListeners()) return;
+    if (ws?.readyState !== WebSocket.OPEN) {
+      // Connection dropped without firing onclose (rare but happens) — recover
+      ensureSocket();
+      return;
+    }
+    // PumpPortal idles closed sockets without a frame; if we've been quiet too long, hard-reset
+    if (lastMessageAt > 0 && Date.now() - lastMessageAt > SILENCE_THRESHOLD_MS) {
+      try {
+        ws.close();
+      } catch {
+        /* ignore */
+      }
+      ws = null;
+      emitConnection(false);
+      ensureSocket();
+    }
+  }, HEALTH_CHECK_INTERVAL_MS);
+}
+
+function stopHealthCheck() {
+  if (healthTimer) {
+    clearInterval(healthTimer);
+    healthTimer = null;
+  }
+}
+
 function attachHandlers(socket: WebSocket) {
   socket.onopen = () => {
+    reconnectAttempt = 0;
+    lastMessageAt = Date.now();
     const keys = mintsWithListeners();
     if (keys.length) sendWhenOpen({ method: "subscribeTokenTrade", keys });
     if (newTokenListeners.size > 0) sendWhenOpen({ method: "subscribeNewToken" });
     emitConnection(true);
+    startHealthCheck();
   };
 
   socket.onmessage = (ev) => {
+    lastMessageAt = Date.now();
     let parsed: unknown;
     try {
       parsed = JSON.parse(String(ev.data));
@@ -267,14 +306,23 @@ function attachHandlers(socket: WebSocket) {
   socket.onclose = () => {
     ws = null;
     emitConnection(false);
-    if (mintsWithListeners().length === 0) return;
-    setTimeout(() => ensureSocket(), 1_200);
+    if (!hasAnyListeners()) {
+      stopHealthCheck();
+      return;
+    }
+    // Exponential backoff capped at 15s — keeps reconnecting forever as long as something's subscribed
+    const delay = Math.min(1_200 * 2 ** reconnectAttempt, 15_000);
+    reconnectAttempt += 1;
+    setTimeout(() => ensureSocket(), delay);
   };
 }
 
 function ensureSocket() {
   cancelDelayedDisconnect();
-  if (!hasAnyListeners()) return;
+  if (!hasAnyListeners()) {
+    stopHealthCheck();
+    return;
+  }
   if (ws?.readyState === WebSocket.OPEN || ws?.readyState === WebSocket.CONNECTING) return;
   ws = new WebSocket(buildWsUrl());
   attachHandlers(ws);
@@ -295,7 +343,9 @@ export function subscribeNewTokens(handler: PumpPortalTradeHandler): () => void 
 /** Close and reopen when API key / mode changes (call after updating storage or env). */
 export function refreshPumpPortalSocket(): void {
   cancelDelayedDisconnect();
-  const active = mintsWithListeners().length > 0;
+  reconnectAttempt = 0;
+  lastMessageAt = 0;
+  const active = hasAnyListeners();
   try {
     ws?.close();
   } catch {
