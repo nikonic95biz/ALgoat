@@ -66,7 +66,8 @@ async function resolveMcAxisMultiplier(
   if (heuristic === 1) {
     return { mult: 1, yAxisIsMarketCapUsd: false, tokenUiSupply: null };
   }
-  const supply = await fetchTokenUiSupply(mint);
+  // Supply fetch is best-effort — if RPC is unavailable fall back to 1B heuristic silently
+  const supply = await fetchTokenUiSupply(mint).catch(() => null);
   if (
     supply != null &&
     Number.isFinite(supply) &&

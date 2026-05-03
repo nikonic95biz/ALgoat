@@ -23,8 +23,8 @@ export async function fetchTokenUiSupply(mint: string): Promise<number | null> {
   const m = mint.trim();
   if (!m) return null;
   try {
-    const res = await fetchSolanaRpc({ jsonrpc: "2.0", id: 1, method: "getTokenSupply", params: [m] });
-    if (!res.ok) return null;
+    const res = await fetchSolanaRpc({ jsonrpc: "2.0", id: 1, method: "getTokenSupply", params: [m] }).catch(() => null);
+    if (!res || !res.ok) return null;
     const data = (await res.json()) as RpcSupplyResult & { error?: unknown };
     if (data.error != null) return null;
     const v = data.result?.value;

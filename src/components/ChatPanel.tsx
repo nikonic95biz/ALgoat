@@ -49,12 +49,10 @@ import { consumeChatCompletionStream } from "@/lib/streamChat";
 import { mergeAbortSignals } from "@/lib/mergeAbortSignals";
 import {
   githubGetFileContent,
-  githubGetLatestWorkflowRun,
   type WorkflowRunStatus,
 } from "@/lib/githubApi";
 import type { ChatMessage, ModelSettings } from "@/types";
 
-const WORKFLOW_FILE = "deploy-pages.yml";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -585,7 +583,7 @@ export function ChatPanel() {
   const [diffState, setDiffState] = useState<DiffState>(null);
   const [diffOriginal, setDiffOriginal] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
-  const [deployStatus, setDeployStatus] = useState<WorkflowRunStatus | null | undefined>(undefined);
+  const [deployStatus] = useState<WorkflowRunStatus | null | undefined>(undefined);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [atQuery, setAtQuery] = useState<string | null>(null);
   const [atMentionedPaths, setAtMentionedPaths] = useState<string[]>([]);
@@ -596,24 +594,9 @@ export function ChatPanel() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // ── Deploy status ──────────────────────────────────────────────────
-  const fetchDeployStatus = useCallback(async () => {
-    const { token, owner, repo } = githubWorkspace;
-    if (!token || !owner || !repo) return;
-    try {
-      const run = await githubGetLatestWorkflowRun(token, owner, repo, WORKFLOW_FILE);
-      setDeployStatus(run);
-    } catch { /* silent */ }
-  }, [githubWorkspace]);
-
-  useEffect(() => { void fetchDeployStatus(); }, [fetchDeployStatus]);
-
-  // Poll every 15 s while a deploy is actively in progress
-  useEffect(() => {
-    if (deployStatus?.status === "queued" || deployStatus?.status === "in_progress") {
-      const id = setInterval(() => void fetchDeployStatus(), 15_000);
-      return () => clearInterval(id);
-    }
-  }, [deployStatus?.status, fetchDeployStatus]);
+  // Deploy status polling removed — Vercel auto-deploys on push, no workflow file needed.
+  const fetchDeployStatus = useCallback(async () => { /* no-op */ }, []);
+  void fetchDeployStatus;
 
   // ── Scroll ────────────────────────────────────────────────────────
   const { leadingAssistants, conversation } = useMemo(() => {
