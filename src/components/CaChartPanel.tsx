@@ -671,12 +671,13 @@ export function CaChartPanel() {
           if (cancelled) return;
           setBaseRows(candles);
           setYMcCap(yAxisIsMarketCapUsd);
-          setTokenUiSupply(supply);
+          // Only update supply if RPC actually returned one — don't overwrite a cached value with null
+          if (supply != null) setTokenUiSupply(supply);
         } catch {
           /* keep last series */
         }
       })();
-    }, 4000);
+    }, 30_000); // 30s is enough — candles are visual history, supply changes rarely
     return () => {
       cancelled = true;
       window.clearInterval(poll);

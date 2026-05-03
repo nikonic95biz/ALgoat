@@ -2,6 +2,9 @@ import type { CandlestickData, UTCTimestamp } from "lightweight-charts";
 import type { PumpPortalLiveRow } from "@/hooks/usePumpPortalTrades";
 import { fetchTokenUiSupply } from "@/lib/solanaTokenSupply";
 
+// Cache supply per mint so repeated candle polls don't hammer the RPC
+const supplyCache = new Map<string, number>();
+
 /**
  * Legacy pump UI / PumpPortal MC convention (price × 1e9) when on-chain supply is unavailable.
  * Real MC uses `fetchTokenUiSupply(mint) × spot` to match Axiom/DexScreener (~minted SPL amount).
@@ -66,19 +69,14 @@ async function resolveMcAxisMultiplier(
   if (heuristic === 1) {
     return { mult: 1, yAxisIsMarketCapUsd: false, tokenUiSupply: null };
   }
-  // Supply fetch is best-effort — if RPC is unavailable fall back to 1B heuristic silently
-  const supply = await fetchTokenUiSupply(mint).catch(() => null);
-  if (
-    supply != null &&
-    Number.isFinite(supply) &&
-    supply > 0 &&
-    supply < 1e15
-  ) {
-    return {
-      mult: supply,
-      yAxisIsMarketCapUsd: true,
-      tokenUiSupply: supply,
-    };
+  // Supply fetch is best-effort — cache per mint so repeated polls never hit RPC twice
+  const cached = supplyCache.get(mint);
+  const supply = cached != null
+    ? cached
+    : await fetchTokenUiSupply(mint).catch(() => null);
+  if (supply != null && Number.isFinite(supply) && supply > 0 && supply < 1e15) {
+    supplyCache.set(mint, supply);
+    return { mult: supply, yAxisIsMarketCapUsd: true, tokenUiSupply: supply };
   }
   return {
     mult: PUMP_BONDING_UI_SUPPLY,
