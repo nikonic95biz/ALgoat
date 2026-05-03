@@ -25,7 +25,7 @@ export function LandingPage({ homeHref, workspaceHref, onOpenWorkspace }: Landin
     <div className="relative min-h-[100dvh] overflow-x-hidden bg-[#070708] font-sans text-[#c4c9d2] antialiased">
       <PageBackground />
       <NavBar homeHref={homeHref} onOpenWorkspace={onOpenWorkspace} />
-      <Hero workspaceHref={workspaceHref} onOpenWorkspace={onOpenWorkspace} />
+      <Hero onOpenWorkspace={onOpenWorkspace} />
       <PurposeSection />
       <StarterStrategies />
       <PrivacySection workspaceHref={workspaceHref} />
@@ -49,24 +49,22 @@ function NavBar({ homeHref, onOpenWorkspace }: { homeHref: string; onOpenWorkspa
           <span className="text-[15px] font-semibold">SolClaw</span>
         </a>
         <div className="flex items-center gap-2">
-          {GH ? (
-            <a
-              href={GH}
-              target="_blank"
-              rel="noreferrer"
-              className="hidden rounded-lg border border-white/[0.1] px-3 py-2 text-[13px] font-medium text-[#9aa4b2] transition-colors hover:border-white/[0.2] hover:text-[#eceff4] sm:inline-flex"
-            >
-              GitHub
-            </a>
-          ) : null}
           <button
             type="button"
             onClick={onOpenWorkspace}
+            className="hidden rounded-lg border border-white/[0.1] px-3 py-2 text-[13px] font-medium text-[#9aa4b2] transition-colors hover:border-white/[0.2] hover:text-[#eceff4] sm:inline-flex"
+          >
+            Demo
+          </button>
+          <a
+            href={GH || "https://github.com/enrichthetrenches/solclaw"}
+            target="_blank"
+            rel="noreferrer"
             className="group inline-flex items-center gap-1.5 rounded-lg bg-[#2EA8FF] px-3.5 py-2 text-[13px] font-semibold text-[#040d18] shadow-[0_0_24px_rgba(46,168,255,0.22)] transition-[filter,transform] hover:brightness-110 active:scale-[0.98]"
           >
-            Open IDE
+            Fork on GitHub
             <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" strokeWidth={2.6} />
-          </button>
+          </a>
         </div>
       </div>
     </header>
@@ -75,7 +73,7 @@ function NavBar({ homeHref, onOpenWorkspace }: { homeHref: string; onOpenWorkspa
 
 // ── Hero ──────────────────────────────────────────────────────────────────────
 
-function Hero({ workspaceHref, onOpenWorkspace }: { workspaceHref: string; onOpenWorkspace: () => void }) {
+function Hero({ onOpenWorkspace }: { onOpenWorkspace: () => void }) {
   return (
     <section className="relative z-10 mx-auto max-w-5xl px-5 pb-16 pt-20 sm:px-8 sm:pb-24 sm:pt-32">
       <div className="grid items-center gap-14 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
@@ -97,40 +95,29 @@ function Hero({ workspaceHref, onOpenWorkspace }: { workspaceHref: string; onOpe
           </p>
 
           <div className="mt-9 flex flex-wrap items-center gap-3">
+            <a
+              href={GH || "https://github.com/enrichthetrenches/solclaw"}
+              target="_blank"
+              rel="noreferrer"
+              className="group inline-flex items-center gap-2 rounded-xl bg-[#2EA8FF] px-6 py-3.5 text-[15px] font-semibold text-[#040d18] shadow-[0_0_40px_rgba(46,168,255,0.25)] transition-[filter,transform] hover:brightness-110 active:scale-[0.99]"
+            >
+              <GitBranch className="h-4 w-4" strokeWidth={2.6} />
+              Fork on GitHub
+            </a>
             <button
               type="button"
               onClick={onOpenWorkspace}
-              className="group inline-flex items-center gap-2 rounded-xl bg-[#2EA8FF] px-6 py-3.5 text-[15px] font-semibold text-[#040d18] shadow-[0_0_40px_rgba(46,168,255,0.25)] transition-[filter,transform] hover:brightness-110 active:scale-[0.99]"
+              className="group inline-flex items-center gap-2 rounded-xl border border-white/[0.12] bg-white/[0.02] px-6 py-3.5 text-[15px] font-medium text-[#dce1ea] transition-colors hover:border-[#2EA8FF]/35 hover:text-[#2EA8FF]"
             >
-              Open the IDE
-              <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" strokeWidth={2.6} />
+              <Code2 className="h-4 w-4" strokeWidth={2.2} />
+              Try the demo
             </button>
-            {GH && (
-              <a
-                href={GH}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-2 rounded-xl border border-white/[0.12] bg-white/[0.02] px-6 py-3.5 text-[15px] font-medium text-[#dce1ea] transition-colors hover:border-[#2EA8FF]/35 hover:text-[#2EA8FF]"
-              >
-                <Code2 className="h-4 w-4" strokeWidth={2.2} />
-                View source
-              </a>
-            )}
-            {!GH && (
-              <a
-                href={workspaceHref}
-                className="inline-flex items-center gap-2 rounded-xl border border-white/[0.12] bg-white/[0.02] px-6 py-3.5 text-[15px] font-medium text-[#dce1ea] transition-colors hover:border-[#2EA8FF]/35 hover:text-[#2EA8FF]"
-              >
-                <Code2 className="h-4 w-4" strokeWidth={2.2} />
-                Direct link
-              </a>
-            )}
           </div>
 
           <div className="mt-10 grid grid-cols-3 gap-5 border-t border-white/[0.06] pt-8 max-w-sm">
-            <Stat n="0" label="servers required" />
             <Stat n="MIT" label="open source" />
-            <Stat n="100%" label="keys stay local" />
+            <Stat n="0" label="servers required" />
+            <Stat n="100%" label="self-hosted" />
           </div>
         </div>
 
@@ -349,19 +336,30 @@ function Footer({ onOpenWorkspace }: { onOpenWorkspace: () => void }) {
         <div className="rounded-2xl border border-[#2EA8FF]/15 bg-[linear-gradient(180deg,rgba(46,168,255,0.05),transparent)] p-8 sm:p-10 text-center">
           <div className="text-[2rem]">🫒</div>
           <h3 className="mt-4 text-balance text-[1.5rem] font-semibold tracking-tight text-[#eceff4] sm:text-[1.85rem]">
-            Open source. No signup. Start trading.
+            Open source. Fork it. Make it yours.
           </h3>
           <p className="mx-auto mt-3 max-w-md text-[14px] text-[#6e7782]">
-            No signup. No backend. Load a mint, watch the tape, build something.
+            Self-host in minutes. Your keys, your machine, your algorithms.
           </p>
-          <button
-            type="button"
-            onClick={onOpenWorkspace}
-            className="group mt-7 inline-flex items-center gap-2 rounded-xl bg-[#2EA8FF] px-6 py-3.5 text-[15px] font-semibold text-[#040d18] shadow-[0_0_40px_rgba(46,168,255,0.25)] transition-[filter,transform] hover:brightness-110 active:scale-[0.99]"
-          >
-            Open the IDE
-            <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" strokeWidth={2.6} />
-          </button>
+          <div className="mt-7 flex flex-wrap justify-center gap-3">
+            <a
+              href={GH || "https://github.com/enrichthetrenches/solclaw"}
+              target="_blank"
+              rel="noreferrer"
+              className="group inline-flex items-center gap-2 rounded-xl bg-[#2EA8FF] px-6 py-3.5 text-[15px] font-semibold text-[#040d18] shadow-[0_0_40px_rgba(46,168,255,0.25)] transition-[filter,transform] hover:brightness-110 active:scale-[0.99]"
+            >
+              <GitBranch className="h-4 w-4" strokeWidth={2.6} />
+              Fork on GitHub
+            </a>
+            <button
+              type="button"
+              onClick={onOpenWorkspace}
+              className="group inline-flex items-center gap-2 rounded-xl border border-white/[0.12] bg-white/[0.02] px-6 py-3.5 text-[15px] font-medium text-[#dce1ea] transition-colors hover:border-[#2EA8FF]/35 hover:text-[#2EA8FF]"
+            >
+              Try demo
+              <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" strokeWidth={2.2} />
+            </button>
+          </div>
         </div>
 
         <div className="mt-10 flex flex-col items-center justify-between gap-3 text-[12px] text-[#3a4050] sm:flex-row">
