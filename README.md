@@ -2,7 +2,7 @@
 
 **The algo trading IDE for Solana memecoins.**
 
-Live chart, order-book tape, token Nursery, paper trading sim, real PumpPortal Lightning execution, and an AI assistant that sees your live dashboard — all in one browser tab. No backend, no signup, keys stay local.
+Write, test, and deploy trading algorithms directly in the browser. The AI assistant has native access to your live dashboard state, real-time order-book data, and full codebase — propose a strategy change, see the diff, commit to your fork, and watch it run. No backend, no signup, keys stay local.
 
 [![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
@@ -12,14 +12,14 @@ Live chart, order-book tape, token Nursery, paper trading sim, real PumpPortal L
 
 | Feature | Details |
 |---------|---------|
+| **In-browser IDE** | Monaco editor with the full codebase bundled — write, edit, and deploy algo logic without leaving the tab |
+| **AI assistant** | Embedded chat (Anthropic, OpenAI, Groq, OpenRouter, Mistral, Ollama, …) with live dashboard state + full codebase context. Proposes diffs, applies them, commits to your fork |
+| **GitHub** | Fork in two clicks. Live file tree, diff preview, commit and push — built into the IDE |
+| **Nursery** | Four-tab token watcher tracking hundreds of coins around the clock — New Launches, Not So New, A Little Old, Older (zombie revival scoring) |
 | **Chart** | Live OHLC for any pump.fun mint, auto-streaming via PumpPortal WebSocket |
 | **Order-book tape** | Real-time buy/sell print stream with size and market cap |
-| **Nursery** | Four-tab token watcher — New Launches, Not So New, A Little Old, Older (zombie revival scoring) |
-| **Scalper bot** | Rules-based algo on the live tape — dip entry, take-profit, stop-loss. Paper by default, flip to live when ready |
 | **Real trading** | PumpPortal Lightning API — executes directly from the wallet linked to your API key |
-| **AI assistant** | Embedded chat (Anthropic, OpenAI, Groq, OpenRouter, Mistral, Ollama, …) with full codebase + live dashboard context |
-| **In-browser IDE** | Monaco editor with a bundled project snapshot — browse and edit algos without leaving the tab |
-| **GitHub integration** | Optional PAT → fork, live file tree, commit and push from inside the IDE |
+| **Paper trading** | Run any algo on the live feed without spending SOL — validate before deploying capital |
 
 All state (keys, settings, chat history) lives in **your browser's `localStorage`**. Nothing is sent to any server this project operates.
 
@@ -50,7 +50,7 @@ Open **Setup** (key icon in the nav) and add:
 
 1. **PumpPortal API key** — [pumpportal.fun/trading-api/setup](https://pumpportal.fun/trading-api/setup). Keep ≥ 0.02 SOL in the linked wallet for the order book and real trades to work.
 2. **LLM key** — any supported provider. The app auto-detects from the key prefix (`sk-ant-` → Anthropic, `sk-or-v1-` → OpenRouter, `gsk_` → Groq, etc.).
-3. **GitHub PAT** *(optional)* — `public_repo` scope. Enables live file tree and commit-from-IDE.
+3. **GitHub PAT** — `public_repo` scope. Connects the IDE to your fork — live file tree, AI-proposed diffs, commit and push without leaving the app. Fork in two clicks via **Fork & connect**.
 
 ---
 
