@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import type { BotTradeRow, BotTradeRowChain, BotTradeRowTape, ScalperPaperSnapshot } from "@/lib/scalperPaperEngine";
+import type { BounceZone } from "@/lib/chartBounceZones";
 import { createAssistantGreetingMessage } from "@/lib/chatGreeting";
 import { inferBackendIdFromBaseUrl } from "@/lib/llmBackends";
 import type { ChatMessage, ChatSession, GitHubWorkspaceSettings, ModelSettings, UserAlgoPreset } from "@/types";
@@ -25,6 +26,8 @@ const SELECTED_ALGO_KEY = "unt_selected_algo_v1";
 const CA_MINT_KEY = "unt_ca_mint_v1";
 const SCALPER_LIVE_BUY_SOL_KEY = "unt_scalper_live_buy_sol_v1";
 const PERSISTED_TRADES_KEY = "unt_persisted_bot_trades_v1";
+const BOUNCE_ZONES_KEY = "unt_bounce_zones_v1";
+const SCALPER_USER_CONFIG_KEY = "unt_scalper_user_config_v1";
 const SCALPER_LIVE_BUY_MIN = 0.001;
 const SCALPER_LIVE_BUY_MAX = 25;
 const MAX_STORED_MESSAGES = 120;
@@ -134,6 +137,37 @@ function loadGithubWorkspace(): GitHubWorkspaceSettings {
   }
 }
 
+/** User-editable scalper strategy parameters (knobs in the sidebar). */
+export type ScalperUserConfig = {
+  dipMinPct: number;
+  catalystMinSol: number;
+  takeProfitPct: number;
+  minOrderBookSellSolForStop: number;
+  realSlippagePct: number;
+  realPriorityFeeSol: number;
+};
+
+function defaultScalperUserConfig(): ScalperUserConfig {
+  return {
+    dipMinPct: SCALPER_PAPER_CONFIG.dipMinPct,
+    catalystMinSol: SCALPER_PAPER_CONFIG.catalystMinSol,
+    takeProfitPct: SCALPER_PAPER_CONFIG.takeProfitPct,
+    minOrderBookSellSolForStop: SCALPER_PAPER_CONFIG.minOrderBookSellSolForStop,
+    realSlippagePct: SCALPER_PAPER_CONFIG.realSlippagePct,
+    realPriorityFeeSol: 0.001, // bumped from 0.00006 default
+  };
+}
+
+function loadScalperUserConfig(): ScalperUserConfig {
+  try {
+    const raw = localStorage.getItem(SCALPER_USER_CONFIG_KEY);
+    if (!raw) return defaultScalperUserConfig();
+    return { ...defaultScalperUserConfig(), ...JSON.parse(raw) } as ScalperUserConfig;
+  } catch {
+    return defaultScalperUserConfig();
+  }
+}
+
 export type ActivitySection = "analytics" | "models" | "code" | "performance" | "training";
 export type SidebarMode = "analytics" | "models" | "code" | "performance" | "training";
 
@@ -146,6 +180,33 @@ export type PersistedBotTrade = (BotTradeRowChain | BotTradeRowTape) & {
   walletPk: string;
   mint: string;
 };
+
+/**
+ * A bounce zone the user has confirmed (or manually created) for a specific mint.
+ * Survives session resets so lines re-appear when you re-load the same token.
+ */
+export type UserBounceZone = {
+  id: string;
+  mint: string;
+  /** Price level in the same USD units as the chart (MC USD or price USD). */
+  price: number;
+  /** Auto-detected touch count; 0 = manually added. */
+  touches: number;
+  /** Whether this zone is active (used as an entry condition). */
+  enabled: boolean;
+  /** 0–1 strength from detection; 0 = manual. */
+  strength: number;
+};
+
+function loadBounceZones(): UserBounceZone[] {
+  try {
+    const raw = localStorage.getItem(BOUNCE_ZONES_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as UserBounceZone[];
+  } catch {
+    return [];
+  }
+}
 
 function loadPersistedTrades(): PersistedBotTrade[] {
   try {
@@ -287,6 +348,24 @@ type AppState = {
   setTradingHalted: (v: boolean) => void;
   /** Emergency stop: halt live sends + end scalper session. */
   hardStopTrading: () => void;
+  /** User-editable scalper strategy params (knobs). Persisted to localStorage. */
+  scalperUserConfig: ScalperUserConfig;
+  setScalperUserConfig: (patch: Partial<ScalperUserConfig>) => void;
+  /** Bounce zones for the current (and past) mints — auto-detected + user overrides. */
+  bounceZones: UserBounceZone[];
+  /** Replace detected zones for a mint (called when candles reload). Keeps user-manual zones intact. */
+  setDetectedZones: (mint: string, zones: BounceZone[]) => void;
+  /** Bump this to re-run candle bounce detection for the active chart (Suggest lines button). */
+  bounceSuggestionTick: number;
+  refreshSuggestedBounceZones: () => void;
+  /** Toggle a zone on/off. */
+  toggleBounceZone: (id: string) => void;
+  /** Update the price of a zone (user edits the number input). */
+  updateBounceZonePrice: (id: string, price: number) => void;
+  /** Add a manual zone for a mint. */
+  addBounceZone: (mint: string, price: number) => void;
+  /** Remove a zone entirely. */
+  removeBounceZone: (id: string) => void;
   /** All-time persisted bot trades (real + paper) across sessions and wallet changes. */
   persistedBotTrades: PersistedBotTrade[];
   /** Append new closed trades to the persistent log. Deduplicates by id. */
@@ -334,6 +413,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [tradingMode, setTradingModeState] = useState<TradingMode>(loadTradingMode);
   const [algoSessionActive, setAlgoSessionActive] = useState(false);
   const [tradingHalted, setTradingHalted] = useState(false);
+  const [scalperUserConfig, setScalperUserConfigState] = useState<ScalperUserConfig>(loadScalperUserConfig);
+  const [bounceZones, setBounceZones] = useState<UserBounceZone[]>(loadBounceZones);
   const [persistedBotTrades, setPersistedBotTrades] = useState<PersistedBotTrade[]>(loadPersistedTrades);
   const [githubWorkspace, setGithubWorkspaceState] = useState(loadGithubWorkspace);
   const [openFilePath, setOpenFilePath] = useState<string | null>(null);
@@ -385,6 +466,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     lsSave(GITHUB_WORKSPACE_KEY, JSON.stringify(githubWorkspace));
   }, [githubWorkspace]);
+
+  useEffect(() => {
+    lsSave(SCALPER_USER_CONFIG_KEY, JSON.stringify(scalperUserConfig));
+  }, [scalperUserConfig]);
+
+  useEffect(() => {
+    lsSave(BOUNCE_ZONES_KEY, JSON.stringify(bounceZones));
+  }, [bounceZones]);
 
   useEffect(() => {
     lsSave(PERSISTED_TRADES_KEY, JSON.stringify(persistedBotTrades));
@@ -572,6 +661,58 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setScalperLiveBuySolState(clampScalperLiveBuySol(v));
   }, []);
 
+  const setScalperUserConfig = useCallback((patch: Partial<ScalperUserConfig>) => {
+    setScalperUserConfigState((prev) => ({ ...prev, ...patch }));
+  }, []);
+
+  const [bounceSuggestionTick, setBounceSuggestionTick] = useState(0);
+  const refreshSuggestedBounceZones = useCallback(() => {
+    setBounceSuggestionTick((n) => n + 1);
+  }, []);
+
+  const setDetectedZones = useCallback((mint: string, zones: BounceZone[]) => {
+    setBounceZones((prev) => {
+      // Keep manual zones (touches === 0) for this mint; replace auto ones
+      const manual = prev.filter((z) => z.mint === mint && z.touches === 0);
+      const other = prev.filter((z) => z.mint !== mint);
+      const fresh: UserBounceZone[] = zones.map((z) => ({
+        id: `auto-${mint}-${z.price.toFixed(6)}`,
+        mint,
+        price: z.price,
+        touches: z.touches,
+        enabled: true,
+        strength: z.strength,
+      }));
+      return [...other, ...manual, ...fresh];
+    });
+  }, []);
+
+  const toggleBounceZone = useCallback((id: string) => {
+    setBounceZones((prev) => prev.map((z) => z.id === id ? { ...z, enabled: !z.enabled } : z));
+  }, []);
+
+  const updateBounceZonePrice = useCallback((id: string, price: number) => {
+    if (!Number.isFinite(price) || price <= 0) return;
+    setBounceZones((prev) => prev.map((z) => z.id === id ? { ...z, price } : z));
+  }, []);
+
+  const addBounceZone = useCallback((mint: string, price: number) => {
+    if (!Number.isFinite(price) || price <= 0) return;
+    const zone: UserBounceZone = {
+      id: `manual-${mint}-${Date.now()}`,
+      mint,
+      price,
+      touches: 0,
+      enabled: true,
+      strength: 0,
+    };
+    setBounceZones((prev) => [...prev, zone]);
+  }, []);
+
+  const removeBounceZone = useCallback((id: string) => {
+    setBounceZones((prev) => prev.filter((z) => z.id !== id));
+  }, []);
+
   const hardStopTrading = useCallback(() => {
     setTradingHalted(true);
     setAlgoSessionActive(false);
@@ -659,6 +800,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
       tradingHalted,
       setTradingHalted,
       hardStopTrading,
+      scalperUserConfig,
+      setScalperUserConfig,
+      bounceZones,
+      setDetectedZones,
+      bounceSuggestionTick,
+      refreshSuggestedBounceZones,
+      toggleBounceZone,
+      updateBounceZonePrice,
+      addBounceZone,
+      removeBounceZone,
       persistedBotTrades,
       appendPersistedTrades,
       clearPersistedTrades,
@@ -683,6 +834,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       sidebarMode, sidebarOpen, activitySection,
       userAlgos, addUserAlgo, removeUserAlgo, selectedAlgoId,
       caMintInput, scalperLiveBuySol, tradingMode, algoSessionActive, tradingHalted,
+      scalperUserConfig, setScalperUserConfig,
+      bounceZones, setDetectedZones, bounceSuggestionTick, refreshSuggestedBounceZones,
+      toggleBounceZone, updateBounceZonePrice, addBounceZone, removeBounceZone,
       persistedBotTrades, appendPersistedTrades, clearPersistedTrades,
       githubWorkspace, setGithubWorkspace,
       openFilePath, openFileContent, setOpenFile,

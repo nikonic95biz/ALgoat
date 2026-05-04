@@ -17,6 +17,8 @@ import type {
   Time,
   UTCTimestamp,
 } from "lightweight-charts";
+
+type BouncePriceLineHandle = ReturnType<ISeriesApi<"Candlestick">["createPriceLine"]>;
 import { PumpOrderBook } from "@/components/PumpOrderBook";
 import { TokenInfoBar } from "@/components/TokenInfoBar";
 import { useApp, type ChartCandleBarSummary, type ChartTapeSummary } from "@/context/AppContext";
@@ -50,6 +52,7 @@ import {
   getPumpPortalTradingWalletPubkey,
 } from "@/lib/pumpPortalConfig";
 import { fetchWalletSolDeltaSol } from "@/lib/solanaTxSolDelta";
+import { detectBounceZones, FLOOR_DETECTION_INTERVAL } from "@/lib/chartBounceZones";
 import { postPumpPortalLightningTrade, confirmLightningTx } from "@/lib/pumpPortalLightningTrade";
 
 /** Dark trading terminal palette (high-contrast teal up / coral down on charcoal). */
@@ -236,11 +239,18 @@ export function CaChartPanel() {
     hardStopTrading,
     scalperLiveBuySol,
     appendPersistedTrades,
+    bounceZones,
+    setDetectedZones,
+    updateBounceZonePrice,
+    scalperUserConfig,
+    bounceSuggestionTick,
   } = useApp();
 
   const hostRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  /** Zone id → chart price line (updated during drag without React thrash). */
+  const bouncePriceLineHandlesRef = useRef<Map<string, BouncePriceLineHandle>>(new Map());
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const seriesMarkersPluginRef = useRef<ISeriesMarkersPluginApi<any> | null>(null);
   const fetchGenRef = useRef(0);
@@ -271,6 +281,11 @@ export function CaChartPanel() {
 
   const [mintLoaded, setMintLoaded] = useState<string | null>(null);
   const [baseRows, setBaseRows] = useState<CandlestickData<UTCTimestamp>[]>([]);
+  /** Dedicated 5m candles fetched purely for FloorTool / bounce zone detection.
+   *  Always 5m regardless of the display interval so the detector sees 3.5 days
+   *  of structural price history. */
+  const [floorDetectionRows, setFloorDetectionRows] = useState<CandlestickData<UTCTimestamp>[]>([]);
+  const floorFetchGenRef = useRef(0);
   const [yMcCap, setYMcCap] = useState(true);
   /** SPL minted supply (`getTokenSupply` uiAmount) when RPC succeeded. */
   const [tokenUiSupply, setTokenUiSupply] = useState<number | null>(null);
@@ -403,18 +418,37 @@ export function CaChartPanel() {
     pendingLiveBuySigRef.current = null;
   }, [mintLoaded, tradingMode]);
 
+  const activeBounceZonePrices = useMemo(() =>
+    mintLoaded
+      ? bounceZones.filter((z) => z.mint === mintLoaded && z.enabled).map((z) => z.price)
+      : [],
+  [bounceZones, mintLoaded]);
+
   const paperScalper = useMemo(() => {
     if (!scalperEngineRunning || !mintLoaded || scalperCutoffMs == null) return null;
     return reduceScalperPaper(liveRowsForMc, {
       minTradeTsMs: scalperCutoffMs,
       paperBuySol: tradingMode === "paper" ? scalperLiveBuySol : undefined,
+      activeBounceZonePrices: activeBounceZonePrices.length > 0 ? activeBounceZonePrices : undefined,
+      scalperConfig: scalperUserConfig,
     });
-  }, [scalperEngineRunning, mintLoaded, liveRowsForMc, scalperCutoffMs, tradingMode, scalperLiveBuySol]);
+  }, [scalperEngineRunning, mintLoaded, liveRowsForMc, scalperCutoffMs, tradingMode, scalperLiveBuySol, activeBounceZonePrices, scalperUserConfig]);
 
   const prevLiveOpenRef = useRef<boolean | undefined>(undefined);
   const lastLiveTxAtRef = useRef(0);
   const pendingLiveBuySigRef = useRef<string | null>(null);
   const lastPersistedPaperCountRef = useRef(0);
+
+  // Drag refs — kept stable so event listeners don't need re-adding on every render
+  const draggingZoneIdRef = useRef<string | null>(null);
+  const dragPointerIdRef = useRef<number | null>(null);
+  const pendingDragPriceRef = useRef<number | null>(null);
+  const bounceZonesRef = useRef(bounceZones);
+  const mintLoadedRef = useRef(mintLoaded);
+  const updateBounceZonePriceRef = useRef(updateBounceZonePrice);
+  useEffect(() => { bounceZonesRef.current = bounceZones; }, [bounceZones]);
+  useEffect(() => { mintLoadedRef.current = mintLoaded; }, [mintLoaded]);
+  useEffect(() => { updateBounceZonePriceRef.current = updateBounceZonePrice; }, [updateBounceZonePrice]);
 
   // Persist newly closed paper trades as they accumulate in the session.
   useEffect(() => {
@@ -485,8 +519,8 @@ export function CaChartPanel() {
           mint: mintLoaded,
           amount: maybeBuy ? scalperLiveBuySol : "100%",
           denominatedInSol: maybeBuy ? "true" : "false",
-          slippage: R.realSlippagePct,
-          priorityFee: R.realPriorityFeeSol,
+          slippage: scalperUserConfig.realSlippagePct,
+          priorityFee: scalperUserConfig.realPriorityFeeSol,
           pool: R.realPool,
         });
         if (!res.ok) {
@@ -826,6 +860,189 @@ export function CaChartPanel() {
       restoreScroll();
     });
   }, [chartRows]);
+
+  // Fetch dedicated 5m candles for floor detection on mint load or manual refresh.
+  // Always 5m — independent of the display interval — so the FloorTool always
+  // has ~3.5 days of structural price context regardless of what the user is viewing.
+  useEffect(() => {
+    if (!mintLoaded) {
+      setFloorDetectionRows([]);
+      return;
+    }
+    const gen = ++floorFetchGenRef.current;
+    void (async () => {
+      try {
+        const { candles } = await fetchPumpCandles(mintLoaded, { interval: FLOOR_DETECTION_INTERVAL });
+        if (gen !== floorFetchGenRef.current) return;
+        setFloorDetectionRows(candles);
+      } catch {
+        // Keep previous rows on failure; don't break the chart
+      }
+    })();
+  }, [mintLoaded, bounceSuggestionTick]); // bounceSuggestionTick forces fresh candle fetch on "Suggest lines"
+
+  // Detect bounce zones from dedicated floor detection candles.
+  // currentPrice from baseRows guards against levels price just broke through in the last REST poll.
+  useEffect(() => {
+    if (!mintLoaded || floorDetectionRows.length < 60) return;
+    const currentPrice = baseRows[baseRows.length - 1]?.close;
+    const zones = detectBounceZones(floorDetectionRows, currentPrice);
+    setDetectedZones(mintLoaded, zones);
+  }, [floorDetectionRows, baseRows, mintLoaded, setDetectedZones]);
+
+  // Draw bounce zone price lines on the chart.
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series || !mintLoaded) return;
+
+    const activeMintZones = bounceZones.filter((z) => z.mint === mintLoaded && z.enabled);
+
+    bouncePriceLineHandlesRef.current.clear();
+
+    const s = series as unknown as { _bounceLines?: BouncePriceLineHandle[] };
+    if (s._bounceLines) {
+      for (const line of s._bounceLines) {
+        try { series.removePriceLine(line); } catch { /* ignore */ }
+      }
+    }
+    s._bounceLines = [];
+
+    for (const zone of activeMintZones) {
+      const isAuto = zone.touches > 0;
+      const opacity = isAuto ? Math.max(0.45, zone.strength) : 0.55;
+      const color = `rgba(56,189,248,${opacity})`;
+      const line = series.createPriceLine({
+        price: zone.price,
+        color,
+        lineWidth: isAuto && zone.touches >= 3 ? 2 : 1,
+        lineStyle: isAuto ? 0 : 2,
+        axisLabelVisible: true,
+        title: isAuto ? `×${zone.touches}` : "zone",
+      });
+      s._bounceLines.push(line);
+      bouncePriceLineHandlesRef.current.set(zone.id, line);
+    }
+  }, [bounceZones, mintLoaded]);
+
+  // Drag bounce zone lines: pointer capture + disable chart pan/zoom while dragging;
+  // move the native price line directly — React state updates once on release (smooth).
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+
+    const SNAP_PX = 10;
+
+    const endDrag = () => {
+      const chart = chartRef.current;
+      const id = draggingZoneIdRef.current;
+      const price = pendingDragPriceRef.current;
+      const pid = dragPointerIdRef.current;
+
+      draggingZoneIdRef.current = null;
+      dragPointerIdRef.current = null;
+      pendingDragPriceRef.current = null;
+      host.style.cursor = "";
+
+      if (chart) {
+        chart.applyOptions({ handleScroll: true, handleScale: true });
+      }
+      if (pid != null) {
+        try {
+          host.releasePointerCapture(pid);
+        } catch {
+          /* not capturing */
+        }
+      }
+      if (id != null && price != null && price > 0) {
+        updateBounceZonePriceRef.current(id, price);
+      }
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      const chart = chartRef.current;
+      const series = seriesRef.current;
+      const mint = mintLoadedRef.current;
+      if (!chart || !series || !mint) return;
+
+      const rect = host.getBoundingClientRect();
+      const y = e.clientY - rect.top;
+      const zones = bounceZonesRef.current.filter((z) => z.mint === mint && z.enabled);
+      for (const zone of zones) {
+        const lineY = series.priceToCoordinate(zone.price);
+        if (lineY != null && Math.abs(y - lineY) <= SNAP_PX) {
+          e.preventDefault();
+          e.stopPropagation();
+          chart.applyOptions({ handleScroll: false, handleScale: false });
+          draggingZoneIdRef.current = zone.id;
+          dragPointerIdRef.current = e.pointerId;
+          pendingDragPriceRef.current = zone.price;
+          host.setPointerCapture(e.pointerId);
+          host.style.cursor = "ns-resize";
+          return;
+        }
+      }
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      const series = seriesRef.current;
+      const id = draggingZoneIdRef.current;
+      const rect = host.getBoundingClientRect();
+      const y = e.clientY - rect.top;
+
+      if (id && series) {
+        const price = series.coordinateToPrice(y);
+        const handle = bouncePriceLineHandlesRef.current.get(id);
+        if (price != null && price > 0 && handle) {
+          handle.applyOptions({ price });
+          pendingDragPriceRef.current = price;
+        }
+        return;
+      }
+
+      const mint = mintLoadedRef.current;
+      if (!series || !mint) return;
+      const zones = bounceZonesRef.current.filter((z) => z.mint === mint && z.enabled);
+      const near = zones.some((zone) => {
+        const lineY = series.priceToCoordinate(zone.price);
+        return lineY != null && Math.abs(y - lineY) <= SNAP_PX;
+      });
+      host.style.cursor = near ? "ns-resize" : "";
+    };
+
+    const onWindowPointerEnd = (e: PointerEvent) => {
+      if (dragPointerIdRef.current !== e.pointerId) return;
+      endDrag();
+    };
+
+    host.addEventListener("pointerdown", onPointerDown, { capture: true });
+    host.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onWindowPointerEnd);
+    window.addEventListener("pointercancel", onWindowPointerEnd);
+
+    return () => {
+      const chart = chartRef.current;
+      const pid = dragPointerIdRef.current;
+      draggingZoneIdRef.current = null;
+      dragPointerIdRef.current = null;
+      pendingDragPriceRef.current = null;
+      host.style.cursor = "";
+      if (chart) {
+        chart.applyOptions({ handleScroll: true, handleScale: true });
+      }
+      if (pid != null) {
+        try {
+          host.releasePointerCapture(pid);
+        } catch {
+          /* ignore */
+        }
+      }
+      host.removeEventListener("pointerdown", onPointerDown, { capture: true });
+      host.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onWindowPointerEnd);
+      window.removeEventListener("pointercancel", onWindowPointerEnd);
+    };
+  }, []);
 
   useEffect(() => {
     const api = seriesMarkersPluginRef.current;

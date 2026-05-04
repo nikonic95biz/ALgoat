@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+// useState is used by BounceZonesEditor and ZoneRow below
 import { BotTradesBook } from "@/components/BotTradesBook";
 import { InlineToolbarPicker } from "@/components/InlineToolbarPicker";
 import { StreamHealthBanner } from "@/components/StreamHealthBanner";
 import { Tooltip } from "@/components/Tooltip";
-import { useApp, type TradingMode } from "@/context/AppContext";
+import { useApp, type TradingMode, type UserBounceZone } from "@/context/AppContext";
 import { BUILTIN_SCALPER_PRESET_ID } from "@/lib/algorithmPresets";
 import {
   appendPumpPortalTradingWalletHint,
@@ -25,24 +26,24 @@ import { TrainingDataPanel } from "@/components/TrainingDataPanel";
 import { usePumpPortalConfigRevision } from "@/hooks/usePumpPortalConfigRevision";
 
 /** Empty BotTradesBook copy follows engine phase — exit wording only once you're in a trade. */
-function botTradesBookEmptyHint(snapshot: ScalperPaperSnapshot | null | undefined): string {
-  const minBuy = SCALPER_PAPER_CONFIG.catalystMinSol;
-  const tp = SCALPER_PAPER_CONFIG.takeProfitPct;
-  const stopSol = SCALPER_PAPER_CONFIG.minOrderBookSellSolForStop;
+function botTradesBookEmptyHint(snapshot: ScalperPaperSnapshot | null | undefined, cfg?: { catalystMinSol: number; takeProfitPct: number; minOrderBookSellSolForStop: number }): string {
+  const minBuy = cfg?.catalystMinSol ?? SCALPER_PAPER_CONFIG.catalystMinSol;
+  const tp = cfg?.takeProfitPct ?? SCALPER_PAPER_CONFIG.takeProfitPct;
+  const stopSol = cfg?.minOrderBookSellSolForStop ?? SCALPER_PAPER_CONFIG.minOrderBookSellSolForStop;
 
   if (!snapshot) {
-    return "No closed trades yet. Stream is up — dip and entry status shows above; completed exits land here.";
+    return "No closed trades yet. When you finish a trade, it shows up here.";
   }
 
   if (snapshot.status === "watching") {
-    return `No closed trades yet. You're flat — watching for a dip, then a ${minBuy}+ SOL buy on the tape to enter.`;
+    return `No closed trades yet. Waiting for the chart to dip, then a buy of at least ${minBuy} SOL before we jump in.`;
   }
 
   if (snapshot.status === "dip") {
-    return `No closed trades yet. Dip active — waiting for a ${minBuy}+ SOL buy on the tape to enter.`;
+    return `No closed trades yet. We’re in the dip — waiting for a buy of at least ${minBuy} SOL before we jump in.`;
   }
 
-  return `No closed trades yet. You're in an open trade; completed round-trips appear here after exit (+${tp}% take-profit or stop when the tape shows a ${stopSol}+ SOL sell).`;
+  return `No closed trades yet. You’re in a trade right now. Finished trades show here after we sell for +${tp}% profit, or after someone sells at least ${stopSol} SOL (that counts as our stop).`;
 }
 
 export function DashboardSidebar() {
@@ -68,6 +69,7 @@ function AnalyticsPanel() {
     hardStopTrading,
     scalperLiveBuySol,
     setScalperLiveBuySol,
+    scalperUserConfig,
   } = useApp();
 
   const pumpCfgRev = usePumpPortalConfigRevision();
@@ -90,7 +92,7 @@ function AnalyticsPanel() {
   const presetGroups = useMemo(() => {
     const builtin = {
       heading: "Built-in",
-      items: [{ value: BUILTIN_SCALPER_PRESET_ID, label: "Order-book scalper" }],
+      items: [{ value: BUILTIN_SCALPER_PRESET_ID, label: "Order-book scalper (built-in)" }],
     };
     if (userAlgos.length === 0) return [builtin];
     return [
@@ -108,8 +110,8 @@ function AnalyticsPanel() {
 
   const presetPickerDisplay = scalperEngineActive
     ? tradingMode === "real"
-      ? "Live scalper (PumpPortal Lightning)"
-      : "Paper scalper (order-book engine)"
+      ? "Running · real money"
+      : "Running · practice"
     : undefined;
 
   const userAlgoDescription = selectedUser?.description?.trim() ? selectedUser.description : null;
@@ -127,7 +129,7 @@ function AnalyticsPanel() {
           <div>
             <h2 className="unt-section-title">Algo trading</h2>
             <p className="unt-help-text mt-2">
-              Pick your algo preset, and start trading. If you&apos;d like a new preset, create it in chat.
+              Pick a bot below and hit Start. Need something custom? Ask chat.
             </p>
           </div>
           <div className="space-y-3 border-t border-[var(--color-border-subtle)] pt-4">
@@ -165,7 +167,7 @@ function AnalyticsPanel() {
                     algoSessionActive && (tradingMode === "paper" || tradingMode === "real")
                   }
                   tradingMode={tradingMode}
-                  liveEntrySol={scalperLiveBuySol}
+
                   liveChainTrades={chartAnalytics.realBotTrades}
                 />
               </div>
@@ -197,7 +199,7 @@ function AnalyticsPanel() {
           >
             {canRunBundledScalper ? (
               <div className="space-y-2 pb-1">
-                <Tooltip text="How much SOL to spend per trade when running in Real mode. Locked while a session is active." side="right">
+                <Tooltip text="How much SOL each buy uses in Real mode (real money). Locked while a session is running." side="right">
                   <label className="unt-field-label cursor-default" htmlFor="scalper-live-entry-sol">
                     Live entry size (SOL)
                   </label>
@@ -224,7 +226,7 @@ function AnalyticsPanel() {
               <h3 className="unt-section-overline mb-0">Trading session</h3>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Tooltip text="Paper: simulated trades with no real money. Real: live Lightning trades via PumpPortal using your trading wallet." side="top">
+              <Tooltip text="Paper = practice, no real money. Real = real buys and sells using your wallet and PumpPortal." side="top">
               <select
                 id="trading-mode-select"
                 value={tradingMode}
@@ -264,7 +266,7 @@ function AnalyticsPanel() {
                   algoSessionActive
                     ? "Stop the current trading session immediately"
                     : !canRunBundledScalper
-                      ? "Select the Order-book scalper preset first"
+                      ? "Pick the built-in scalper first"
                       : !chartAnalytics.mint
                         ? "Paste a token CA in the Chart tab first"
                         : tradingMode === "real"
@@ -312,7 +314,7 @@ function AnalyticsPanel() {
             )}
             {!algoSessionActive && !canRunBundledScalper && selectedAlgoId != null ? (
               <p className="unt-help-text">
-                Switch to <strong className="font-semibold text-[var(--color-fg-muted)]">Order-book scalper</strong> to run this session.
+                Pick <strong className="font-semibold text-[var(--color-fg-muted)]">Order-book scalper (built-in)</strong> above to run this.
               </p>
             ) : null}
           </div>
@@ -321,19 +323,19 @@ function AnalyticsPanel() {
             <h3 className="unt-section-overline">Live bot trades</h3>
             {!algoSessionActive ? (
               <p className="unt-help-text">
-                Start with Order-book scalper + Chart mint to log bot fills here.
+                Pick the built-in scalper, put a coin on Chart, then tap Start — trades show here.
               </p>
             ) : selectedAlgoId !== BUILTIN_SCALPER_PRESET_ID ? (
               <p className="unt-help-text">
-                Select Order-book scalper above, then <strong className="font-semibold text-[var(--color-fg-muted)]">Start</strong>.
+                Pick the built-in scalper above, then tap <strong className="font-semibold text-[var(--color-fg-muted)]">Start</strong>.
               </p>
             ) : !chartAnalytics.mint ? (
               <p className="unt-help-text">
-                Add a mint on Chart so the scalper sees the book.
+                Paste your coin on the Chart tab first — we need to see trades rolling in.
               </p>
             ) : chartAnalytics.orderBookConn !== "open" ? (
               <p className="unt-help-text">
-                Order book: {chartAnalytics.orderBookConn}. Need live PumpPortal stream on Chart.
+                Live feed isn&apos;t ready ({chartAnalytics.orderBookConn}). Keep your Chart tab open with this coin.
               </p>
             ) : tradingMode === "real" ? (
               <>
@@ -348,8 +350,7 @@ function AnalyticsPanel() {
                   </p>
                 ) : null}
                 <p className="unt-help-text">
-                  Live mode uses PumpPortal for trades; sells follow the same exit rules as paper. Buys use{" "}
-                  {scalperLiveBuySol} SOL each (Live entry size above).
+                  Real mode sends trades through PumpPortal. Buys use {scalperLiveBuySol} SOL (see Live entry size above). Sells use the same exit rules as paper.
                 </p>
                 <BotTradesBook
                   rows={chartAnalytics.realBotTrades}
@@ -359,7 +360,7 @@ function AnalyticsPanel() {
             ) : (
               <BotTradesBook
                 rows={chartAnalytics.paperScalper?.botTrades ?? []}
-                emptyHint={botTradesBookEmptyHint(chartAnalytics.paperScalper)}
+                emptyHint={botTradesBookEmptyHint(chartAnalytics.paperScalper, scalperUserConfig)}
                 paperMode
               />
             )}
@@ -370,49 +371,234 @@ function AnalyticsPanel() {
   );
 }
 
-function ScalperPaperRules({
-  tradingMode,
-  liveEntrySol,
-}: {
-  tradingMode: TradingMode;
-  liveEntrySol: number;
+/** Titled section card for strategy settings. */
+function SettingsCard({ label, tip, accent, locked, headerRight, children }: {
+  label: string;
+  tip: string;
+  accent?: "sky";
+  locked?: boolean;
+  headerRight?: ReactNode;
+  children: ReactNode;
+}) {
+  const accentColor = accent === "sky" ? "#38bdf8" : "#2EA8FF";
+  return (
+    <div
+      className="overflow-hidden rounded-lg border"
+      style={{
+        background: "var(--color-bg-editor)",
+        borderColor: `color-mix(in srgb, ${accentColor} 18%, var(--color-border-subtle))`,
+      }}
+    >
+      {/* Header strip */}
+      <div
+        className="flex items-center gap-2 border-b px-3 py-2"
+        style={{
+          borderColor: `color-mix(in srgb, ${accentColor} 15%, var(--color-border-subtle))`,
+          background: `color-mix(in srgb, ${accentColor} 6%, transparent)`,
+        }}
+      >
+        <div
+          className="h-3 w-0.5 shrink-0 rounded-full"
+          style={{ background: `color-mix(in srgb, ${accentColor} 70%, transparent)` }}
+        />
+        <span className="text-[11px] font-semibold tracking-wide" style={{ color: `color-mix(in srgb, ${accentColor} 85%, var(--color-fg))` }}>
+          {label}
+        </span>
+        <HelpTip text={tip} />
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          {locked ? (
+            <span className="text-[9px] text-[var(--color-fg-dim)]">stop session to edit</span>
+          ) : null}
+          {headerRight}
+        </div>
+      </div>
+      {/* Body */}
+      <div className="px-3 py-2.5">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** Small inline help icon — shows tooltip on hover. */
+function HelpTip({ text }: { text: string }) {
+  return (
+    <Tooltip text={text} side="right">
+      <span className="cursor-help select-none rounded-full border border-[var(--color-border-subtle)] px-1.5 py-px text-[9px] font-medium text-[var(--color-fg-dim)] hover:border-[color-mix(in_srgb,#2EA8FF_35%,transparent)] hover:text-[var(--color-fg-muted)]">
+        ?
+      </span>
+    </Tooltip>
+  );
+}
+
+/** One labeled number input knob. */
+function Knob({ label, value, min, max, step, unit, tip, disabled, onChange }: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  unit?: string;
+  tip: string;
+  disabled?: boolean;
+  onChange: (v: number) => void;
 }) {
   return (
-    <div className="rounded-md border border-[var(--color-border-subtle)] px-2 py-2">
-      <div className="text-[11px] font-semibold text-[var(--color-fg-muted)]">
-        {tradingMode === "real"
-          ? "How the Order-book scalper works (live trades use PumpPortal)"
-          : "How the Order-book scalper works"}
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-1">
+        <span className="text-[10px] font-medium text-[var(--color-fg-dim)]">{label}</span>
+        <HelpTip text={tip} />
       </div>
-      <ul className="mt-1.5 list-inside list-disc space-y-1 text-[11px] leading-snug text-[var(--color-fg-dim)]">
-        <li>
-          Calls it a <span className="text-[var(--color-fg-muted)]">dip</span> when market cap drops more than{" "}
-          {SCALPER_PAPER_CONFIG.dipMinPct}% below the recent high. After you close a trade, that high resets to the exit level.
-        </li>
-        <li>
-          <span className="text-[var(--color-fg-muted)]">Opens a buy</span> when one tape print shows a buy larger than{" "}
-          {SCALPER_PAPER_CONFIG.catalystMinSol} SOL.
-        </li>
-        <li>
-          <span className="text-[var(--color-fg-muted)]">Stop-loss</span> when the tape shows a sell of at least{" "}
-          {SCALPER_PAPER_CONFIG.minOrderBookSellSolForStop} SOL (very small sells are ignored).
-        </li>
-        <li>
-          <span className="text-[var(--color-fg-muted)]">Takes profit</span> when market cap is up {SCALPER_PAPER_CONFIG.takeProfitPct}% from entry.
-          Then waits{" "}
-          {(SCALPER_PAPER_CONFIG.reentryCooldownMs / 1000).toLocaleString(undefined, {
-            maximumFractionDigits: 1,
-            minimumFractionDigits: 0,
-          })}
-          s before it can enter again.
-        </li>
-        {tradingMode === "real" ? (
-          <li>
-            <span className="text-[var(--color-fg-muted)]">Live Lightning buys</span> use ~{liveEntrySol} SOL per entry
-            (Trading session · Live entry size).
-          </li>
-        ) : null}
-      </ul>
+      <div className="flex items-center gap-1.5">
+        <input
+          type="number"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          disabled={disabled}
+          onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) onChange(n); }}
+          className={
+            "unt-input h-8 w-full rounded-md border font-mono text-[13px] font-medium tabular-nums " +
+            (disabled
+              ? "cursor-not-allowed opacity-50"
+              : "border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-fg)]")
+          }
+        />
+        {unit ? <span className="shrink-0 text-[10px] font-medium text-[var(--color-fg-dim)]">{unit}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+function SuggestLinesButton() {
+  const { refreshSuggestedBounceZones } = useApp();
+  return (
+    <Tooltip text="Re-scan candles for obvious, repeated bounce lows only — marginal levels are yours to add. Manual lines stay." side="left">
+      <button
+        type="button"
+        onClick={refreshSuggestedBounceZones}
+        className="rounded-md border border-sky-400/35 bg-sky-500/15 px-2 py-1 text-[10px] font-semibold text-sky-100 hover:bg-sky-500/25"
+      >
+        Suggest lines
+      </button>
+    </Tooltip>
+  );
+}
+
+function BounceZonesEditor({ mint }: { mint: string }) {
+  const { bounceZones, toggleBounceZone, updateBounceZonePrice, addBounceZone, removeBounceZone } = useApp();
+  const [newPrice, setNewPrice] = useState("");
+
+  const zones = bounceZones.filter((z) => z.mint === mint).sort((a, b) => b.price - a.price);
+
+  return (
+    <div className="space-y-2">
+      {zones.length === 0 && (
+        <p className="text-[10px] leading-snug text-[var(--color-fg-dim)]">
+          Wait for the chart to load — lines show up when we spot prices that bounced a few times. You can type your own number below too.
+        </p>
+      )}
+
+      {zones.map((z) => (
+        <ZoneRow key={z.id} zone={z}
+          onToggle={() => toggleBounceZone(z.id)}
+          onPriceChange={(p) => updateBounceZonePrice(z.id, p)}
+          onRemove={() => removeBounceZone(z.id)}
+        />
+      ))}
+
+      {/* Add manual zone */}
+      <div className="flex gap-1.5">
+        <input
+          type="number"
+          placeholder="Add price level…"
+          value={newPrice}
+          onChange={(e) => setNewPrice(e.target.value)}
+          className="unt-input h-7 min-w-0 flex-1 font-mono text-[11px] tabular-nums"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              const p = Number(newPrice);
+              if (p > 0) { addBounceZone(mint, p); setNewPrice(""); }
+            }
+          }}
+        />
+        <button
+          type="button"
+          className="rounded-md border border-[var(--color-border-subtle)] px-2.5 py-1 text-[11px] text-[var(--color-fg-dim)] hover:border-sky-400/40 hover:text-sky-300"
+          onClick={() => {
+            const p = Number(newPrice);
+            if (p > 0) { addBounceZone(mint, p); setNewPrice(""); }
+          }}
+        >
+          Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ZoneRow({ zone, onToggle, onPriceChange, onRemove }: {
+  zone: UserBounceZone;
+  onToggle: () => void;
+  onPriceChange: (p: number) => void;
+  onRemove: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(String(zone.price.toFixed(2)));
+
+  const commit = () => {
+    const p = Number(draft);
+    if (p > 0) onPriceChange(p);
+    else setDraft(zone.price.toFixed(2));
+    setEditing(false);
+  };
+
+  return (
+    <div className={
+      "flex items-center gap-1.5 rounded-md border px-2 py-1 transition-colors " +
+      (zone.enabled
+        ? "border-sky-400/25 bg-sky-500/5"
+        : "border-[var(--color-border-subtle)] opacity-50")
+    }>
+      {/* Enable toggle */}
+      <button type="button" onClick={onToggle} className="shrink-0 text-[10px]" title={zone.enabled ? "Disable zone" : "Enable zone"}>
+        <span className={zone.enabled ? "text-sky-400" : "text-[var(--color-fg-dim)]"}>
+          {zone.enabled ? "●" : "○"}
+        </span>
+      </button>
+
+      {/* Price */}
+      {editing ? (
+        <input
+          autoFocus
+          type="number"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => { if (e.key === "Enter") commit(); if (e.key === "Escape") { setDraft(zone.price.toFixed(2)); setEditing(false); } }}
+          className="unt-input h-5 w-24 font-mono text-[11px] tabular-nums"
+        />
+      ) : (
+        <button
+          type="button"
+          className="min-w-0 flex-1 text-left font-mono text-[11px] tabular-nums text-[var(--color-fg)] hover:text-sky-300"
+          onClick={() => { setDraft(zone.price.toFixed(2)); setEditing(true); }}
+          title="Click to edit price"
+        >
+          ${zone.price.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+        </button>
+      )}
+
+      {/* Meta */}
+      <span className="shrink-0 text-[10px] text-[var(--color-fg-dim)]">
+        {zone.touches > 0 ? `×${zone.touches}` : "manual"}
+      </span>
+
+      {/* Remove */}
+      <button type="button" onClick={onRemove} className="shrink-0 text-[10px] text-[var(--color-fg-dim)] hover:text-red-400" title="Remove zone">
+        ✕
+      </button>
     </div>
   );
 }
@@ -423,7 +609,6 @@ function ScalperPaperPanel({
   orderBookConn,
   paperSessionActive,
   tradingMode,
-  liveEntrySol,
   liveChainTrades,
 }: {
   snapshot: ScalperPaperSnapshot | null;
@@ -431,15 +616,71 @@ function ScalperPaperPanel({
   orderBookConn: "idle" | "connecting" | "open" | "closed" | "error";
   paperSessionActive: boolean;
   tradingMode: TradingMode;
-  liveEntrySol: number;
   liveChainTrades: BotTradeRow[];
 }) {
+  const { scalperUserConfig, setScalperUserConfig } = useApp();
+  const locked = paperSessionActive;
+
   const wrap = (belowRules: ReactNode) => (
-    <div
-      className="space-y-3 rounded-lg border border-[var(--color-border-subtle)] px-3 py-3 text-[12px]"
-      style={{ background: "var(--color-fill)" }}
-    >
-      <ScalperPaperRules tradingMode={tradingMode} liveEntrySol={liveEntrySol} />
+    <div className="space-y-2 text-[12px]">
+      {/* ── Entry card ── */}
+      <SettingsCard
+        label="Entry"
+        tip="Rules for when we open a buy."
+        locked={locked}
+      >
+        <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
+          <Knob label="Dip %" value={scalperUserConfig.dipMinPct} min={1} max={50} step={1} unit="%" disabled={locked}
+            tip="How far the chart needs to drop from its recent high before we look for a buy. After each trade, we start measuring again."
+            onChange={(v) => setScalperUserConfig({ dipMinPct: v })} />
+          <Knob label="Min buy (SOL)" value={scalperUserConfig.catalystMinSol} min={0.01} max={10} step={0.05} unit="SOL" disabled={locked}
+            tip="We only jump in if someone buys this much SOL or more. Tiny buys are ignored so we don't chase noise."
+            onChange={(v) => setScalperUserConfig({ catalystMinSol: v })} />
+        </div>
+      </SettingsCard>
+
+      {/* ── Exit card ── */}
+      <SettingsCard label="Exit" tip="Rules for when we sell and leave the trade.">
+        <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
+          <Knob label="Take profit %" value={scalperUserConfig.takeProfitPct} min={1} max={200} step={1} unit="%" disabled={locked}
+            tip="We sell for profit when the chart goes up this much above where we bought (same numbers as on your chart)."
+            onChange={(v) => setScalperUserConfig({ takeProfitPct: v })} />
+          <Knob label="Stop SOL" value={scalperUserConfig.minOrderBookSellSolForStop} min={0.01} max={10} step={0.05} unit="SOL" disabled={locked}
+            tip="If we see a sell this big or bigger, we treat it as a stop and get out. Smaller sells don't count."
+            onChange={(v) => setScalperUserConfig({ minOrderBookSellSolForStop: v })} />
+        </div>
+      </SettingsCard>
+
+      {/* ── Execution card (real mode only) ── */}
+      {tradingMode === "real" ? (
+        <SettingsCard
+          label="Execution"
+          tip="Only used when real money is on. Slippage = how much the price can move before your trade still goes through. Priority fee = a little extra SOL so the chain handles your trade faster."
+          locked={locked}
+        >
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
+            <Knob label="Slippage %" value={scalperUserConfig.realSlippagePct} min={1} max={50} step={1} unit="%" disabled={locked}
+              tip="How much wiggle room the price has. Higher usually means fewer failed trades on jumpy coins."
+              onChange={(v) => setScalperUserConfig({ realSlippagePct: v })} />
+            <Knob label="Priority fee" value={scalperUserConfig.realPriorityFeeSol} min={0.00001} max={0.1} step={0.0005} unit="SOL" disabled={locked}
+              tip="Extra SOL paid so your trade gets picked up sooner. Try around 0.001 SOL to start."
+              onChange={(v) => setScalperUserConfig({ realPriorityFeeSol: v })} />
+          </div>
+        </SettingsCard>
+      ) : null}
+
+      {/* ── Bounce zones card ── */}
+      {mint ? (
+        <SettingsCard
+          label="Bounce zones"
+          tip="Lines on the chart where price bounced a few times. Turn a line on (solid dot) and we only buy when price is close to it. Drag the line on the chart to move it."
+          accent="sky"
+          headerRight={<SuggestLinesButton />}
+        >
+          <BounceZonesEditor mint={mint} />
+        </SettingsCard>
+      ) : null}
+
       {belowRules}
     </div>
   );
@@ -447,33 +688,35 @@ function ScalperPaperPanel({
   if (!paperSessionActive) {
     return wrap(
       <p className="unt-help-text">
-        Press <strong className="font-semibold text-[var(--color-fg-muted)]">Start</strong> under Trading session, then load a mint on Chart so the order book can stream — stats appear below once it&apos;s live.
+        Tap <strong className="font-semibold text-[var(--color-fg-muted)]">Start</strong> below. Paste a coin on the Chart tab so we can see live trades — numbers show up here when it&apos;s working.
       </p>,
     );
   }
   if (!mint) {
     return wrap(
       <p className="unt-help-text">
-        Load Chart with this mint so the book can stream.
+        Put this same coin on the Chart tab first — we need live trades to run.
       </p>,
     );
   }
   if (orderBookConn !== "open") {
-    return wrap(
-      <p className="unt-help-text">
-        Order book: {orderBookConn}. Chart needs a live stream for this mint.
-      </p>,
-    );
+    const plain =
+      orderBookConn === "connecting"
+        ? "Still connecting to live trades…"
+        : orderBookConn === "error"
+          ? "Something broke connecting to live trades. Refresh or try again."
+          : "Live trades are turned off. Open the Chart tab with your coin.";
+    return wrap(<p className="unt-help-text">{plain}</p>);
   }
   if (!snapshot) {
-    return wrap(<p className="unt-help-text">Waiting for trade rows…</p>);
+    return wrap(<p className="unt-help-text">Hang tight — connecting to live trades…</p>);
   }
 
   const st =
     snapshot.status === "watching"
       ? "Watching"
       : snapshot.status === "dip"
-        ? `Dip — waiting for a ${SCALPER_PAPER_CONFIG.catalystMinSol}+ SOL buy on the tape`
+        ? `Dip — need a ${scalperUserConfig.catalystMinSol}+ SOL buy`
         : "In a trade";
 
   const chainLegs =
@@ -511,8 +754,8 @@ function ScalperPaperPanel({
         </span>
       </div>
       <div className="flex justify-between gap-2 text-[var(--color-fg-muted)]">
-        <span title={tradingMode === "real" ? "Wallet SOL net across confirmed Lightning legs (buy+sell txs)" : "Sum of tape MC Δ% (paper sim)"}>
-          {tradingMode === "real" ? "Net Σ SOL" : "MC Δ sum"}
+        <span title={tradingMode === "real" ? "SOL added or removed from your wallet after each finished trade." : "Adds up the chart move % on each practice trade."}>
+          {tradingMode === "real" ? "Total SOL" : "Practice total %"}
         </span>
         <span
           className={
@@ -536,8 +779,8 @@ function ScalperPaperPanel({
       </div>
       {tradingMode === "paper" && snapshot.closedTrades > 0 ? (
         <div className="flex justify-between gap-2 text-[var(--color-fg-muted)]">
-          <span title="Sum of Est. net SOL where both entry and exit prints carried bonding reserves (~fees)">
-            Est. net Σ SOL
+          <span title="Rough SOL profit on practice trades when we have enough price data (not perfect).">
+            Est. practice SOL
           </span>
           <span
             className={
@@ -565,14 +808,14 @@ function ScalperPaperPanel({
       </div>
       {snapshot.currentTrade ? (
         <div className="space-y-1 text-[11px] leading-snug text-[var(--color-fg-muted)]">
-          <div>Entry MC {formatUsdCompact(snapshot.currentTrade.entryMcUsd)}</div>
-          <div>Catalyst {snapshot.currentTrade.catalystSol.toFixed(2)} SOL</div>
+          <div>Bought near {formatUsdCompact(snapshot.currentTrade.entryMcUsd)}</div>
+          <div>Big buy that triggered us: {snapshot.currentTrade.catalystSol.toFixed(2)} SOL</div>
           {snapshot.currentTrade.lastMcUsd != null ? (
-            <div>Last MC {formatUsdCompact(snapshot.currentTrade.lastMcUsd)}</div>
+            <div>Chart now {formatUsdCompact(snapshot.currentTrade.lastMcUsd)}</div>
           ) : null}
           {snapshot.currentTrade.unrealizedPct != null ? (
             <div>
-              Unrealized{" "}
+              Unrealized profit{" "}
               <span
                 className={
                   snapshot.currentTrade.unrealizedPct >= 0 ? "text-emerald-300" : "text-red-400"
@@ -583,7 +826,7 @@ function ScalperPaperPanel({
                   "%"}
               </span>
               {tradingMode === "real" ? (
-                <span className="text-[var(--color-fg-dim)]"> (tape MC)</span>
+                <span className="text-[var(--color-fg-dim)]"> (same as chart)</span>
               ) : null}
             </div>
           ) : null}
