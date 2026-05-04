@@ -40,7 +40,9 @@ export async function fetchWalletSolDeltaSol(signature: string, walletPubkey: st
   const pk = walletPubkey.trim();
   if (!sig || !pk) return null;
 
-  for (let attempt = 0; attempt < 8; attempt++) {
+  // Exponential backoff: 800ms, 1.2s, 1.8s, 2.7s, 4s, 6s, 9s, 13s, 18s, 25s, 35s, 50s
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const backoffMs = Math.min(800 * Math.pow(1.5, attempt), 50_000);
     let res: Response;
     try {
       res = await fetchSolanaRpc({
@@ -51,18 +53,19 @@ export async function fetchWalletSolDeltaSol(signature: string, walletPubkey: st
           sig,
           {
             encoding: "json",
+            // Accept versioned transactions (version 0 and legacy)
             maxSupportedTransactionVersion: 0,
             commitment: "confirmed",
           },
         ],
       });
     } catch {
-      await new Promise((r) => setTimeout(r, 600));
+      await new Promise((r) => setTimeout(r, backoffMs));
       continue;
     }
 
     if (!res.ok) {
-      await new Promise((r) => setTimeout(r, 600));
+      await new Promise((r) => setTimeout(r, backoffMs));
       continue;
     }
 
@@ -72,29 +75,32 @@ export async function fetchWalletSolDeltaSol(signature: string, walletPubkey: st
     };
 
     if (json.error != null) {
-      await new Promise((r) => setTimeout(r, 600));
+      await new Promise((r) => setTimeout(r, backoffMs));
       continue;
     }
 
     const result = json.result;
     if (result == null) {
-      await new Promise((r) => setTimeout(r, 900));
+      // Transaction not yet visible — wait longer before retrying
+      await new Promise((r) => setTimeout(r, backoffMs));
       continue;
     }
 
     const meta = result.meta as { err?: unknown; preBalances?: number[]; postBalances?: number[] } | undefined;
+    // Transaction failed on-chain — don't retry
     if (meta?.err != null) return null;
 
     const keys = collectAccountPubkeys(result);
     const pre = meta?.preBalances;
     const post = meta?.postBalances;
     if (!keys || !pre || !post || keys.length !== pre.length || keys.length !== post.length) {
-      await new Promise((r) => setTimeout(r, 600));
+      await new Promise((r) => setTimeout(r, backoffMs));
       continue;
     }
 
     const idx = keys.findIndex((k) => k === pk);
-    if (idx < 0) return null;
+    // Wallet not a signer in this tx — return 0 rather than null so PnL row is still recorded
+    if (idx < 0) return 0;
 
     return (post[idx]! - pre[idx]!) / 1e9;
   }

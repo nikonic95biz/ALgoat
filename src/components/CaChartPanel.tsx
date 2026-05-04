@@ -21,13 +21,18 @@ import type {
 type BouncePriceLineHandle = ReturnType<ISeriesApi<"Candlestick">["createPriceLine"]>;
 import { PumpOrderBook } from "@/components/PumpOrderBook";
 import { TokenInfoBar } from "@/components/TokenInfoBar";
-import { useApp, type ChartCandleBarSummary, type ChartTapeSummary } from "@/context/AppContext";
+import { useApp, type ChartCandleBarSummary, type ChartTapeSummary, type UserBounceZone } from "@/context/AppContext";
 import { usePumpPortalTrades } from "@/hooks/usePumpPortalTrades";
 import { BUILTIN_SCALPER_PRESET_ID } from "@/lib/algorithmPresets";
 import {
   CHART_INTERVALS,
+  PUMP_CANDLES_MAX_LIMIT,
   chartIntervalBucketSec,
   fetchPumpCandles,
+  fetchPumpCandlesPaged,
+  getCachedCandles,
+  setCachedCandles,
+  mergeBaseCandles,
   mergeLiveMcUsdIntoCandles,
   pumpPortalMcScaleFactor,
   type ChartInterval,
@@ -52,8 +57,15 @@ import {
   getPumpPortalTradingWalletPubkey,
 } from "@/lib/pumpPortalConfig";
 import { fetchWalletSolDeltaSol } from "@/lib/solanaTxSolDelta";
-import { detectBounceZones, FLOOR_DETECTION_INTERVAL } from "@/lib/chartBounceZones";
-import { postPumpPortalLightningTrade, confirmLightningTx } from "@/lib/pumpPortalLightningTrade";
+import { detectBounceZones, MIN_BOOTSTRAP_CANDLES } from "@/lib/chartBounceZones";
+import {
+  inferPumpPortalTradePool,
+  postPumpPortalLightningTradeWithFallback,
+  confirmLightningTx,
+} from "@/lib/pumpPortalLightningTrade";
+import {
+  detectBounceZonesVision,
+} from "@/lib/visionBounceDetect";
 
 /** Dark trading terminal palette (high-contrast teal up / coral down on charcoal). */
 const BG = "#0b0e11";
@@ -244,6 +256,10 @@ export function CaChartPanel() {
     updateBounceZonePrice,
     scalperUserConfig,
     bounceSuggestionTick,
+    setFloorCandlesStatus,
+    model,
+    manualSellRequested,
+    clearManualSellRequest,
   } = useApp();
 
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -255,9 +271,15 @@ export function CaChartPanel() {
   const seriesMarkersPluginRef = useRef<ISeriesMarkersPluginApi<any> | null>(null);
   const fetchGenRef = useRef(0);
   const didFitRef = useRef(false);
+  /**
+   * Ref-stable snapshot of baseRows used to detect full-refresh vs live-tick in the chart
+   * data effect. When only live rows change we use `series.update()` which preserves price
+   * lines; when baseRows change we need `setData()` and must re-draw bounce lines after.
+   */
+  const prevBaseRowsRef = useRef<typeof baseRows>([]);
 
   const [debouncedMint, setDebouncedMint] = useState("");
-  const [chartInterval, setChartInterval] = useState<ChartInterval>("1m");
+  const [chartInterval, setChartInterval] = useState<ChartInterval>("5s");
   const [chartTzChoice, setChartTzChoice] = useState<ChartTimezoneChoice>(() => loadChartTimezoneChoice());
   const [scalperCutoffMs, setScalperCutoffMs] = useState<number | null>(null);
   const [livePumpPortalSig, setLivePumpPortalSig] = useState<string | null>(null);
@@ -281,9 +303,10 @@ export function CaChartPanel() {
 
   const [mintLoaded, setMintLoaded] = useState<string | null>(null);
   const [baseRows, setBaseRows] = useState<CandlestickData<UTCTimestamp>[]>([]);
-  /** Dedicated 5m candles fetched purely for FloorTool / bounce zone detection.
-   *  Always 5m regardless of the display interval so the detector sees 3.5 days
-   *  of structural price history. */
+  /**
+   * 3 × 1000 5m candles prefetched when a mint loads — used by "Suggest lines" on demand.
+   * Always 5m so the detector sees ~10 days of structural history regardless of chart interval.
+   */
   const [floorDetectionRows, setFloorDetectionRows] = useState<CandlestickData<UTCTimestamp>[]>([]);
   const floorFetchGenRef = useRef(0);
   const [yMcCap, setYMcCap] = useState(true);
@@ -313,6 +336,14 @@ export function CaChartPanel() {
       r.mcUsd == null ? r : { ...r, mcUsd: r.mcUsd * portalMcFactor },
     );
   }, [liveRows, portalMcFactor]);
+
+  /** Lightning pool hint from tape (bonding snapshots vs graduated prints). */
+  const lightningPoolPreference = useMemo(() => {
+    const cfg = SCALPER_PAPER_CONFIG.realPool as string;
+    if (cfg !== "auto") return cfg;
+    const h = inferPumpPortalTradePool(liveRowsForMc);
+    return h === "auto" ? "auto" : h;
+  }, [liveRowsForMc]);
 
   const chartRows = useMemo(
     () => mergeLiveMcUsdIntoCandles(baseRows, liveRowsForMc, bucketSec),
@@ -385,6 +416,18 @@ export function CaChartPanel() {
     selectedAlgoId === BUILTIN_SCALPER_PRESET_ID &&
     (tradingMode === "paper" || tradingMode === "real");
 
+  const prevLiveOpenRef = useRef<boolean | undefined>(undefined);
+  const lastLiveTxAtRef = useRef(0);
+  const pendingLiveBuySigRef = useRef<string | null>(null);
+  /** Venue used for the confirmed Lightning buy — sells reuse it so post-migration tokens exit on AMM. */
+  const lastBuyVenueRef = useRef<{ mint: string; pool: string } | null>(null);
+  /**
+   * True only after a real Lightning buy is confirmed on-chain.
+   * Guards sells so we never attempt to sell tokens we never actually received
+   * (e.g. when the buy returned 400 but prevLiveOpenRef already flipped to true).
+   */
+  const realPositionOpenRef = useRef(false);
+
   useEffect(() => {
     const running =
       algoSessionActive &&
@@ -402,6 +445,8 @@ export function CaChartPanel() {
       // Reset pending buy ref so a stale buy sig from the previous session
       // can't be paired with a sell from a new session.
       pendingLiveBuySigRef.current = null;
+      lastBuyVenueRef.current = null;
+      realPositionOpenRef.current = false;
     }
   }, [algoSessionActive, selectedAlgoId, mintLoaded, tradingMode]);
 
@@ -410,33 +455,147 @@ export function CaChartPanel() {
       setLivePumpPortalSig(null);
       setLivePumpPortalErr(null);
       pendingLiveBuySigRef.current = null;
+      lastBuyVenueRef.current = null;
+      realPositionOpenRef.current = false;
     }
   }, [tradingMode]);
 
   useEffect(() => {
     if (tradingMode !== "real") return;
     pendingLiveBuySigRef.current = null;
+    lastBuyVenueRef.current = null;
+    realPositionOpenRef.current = false;
   }, [mintLoaded, tradingMode]);
 
-  const activeBounceZonePrices = useMemo(() =>
-    mintLoaded
-      ? bounceZones.filter((z) => z.mint === mintLoaded && z.enabled).map((z) => z.price)
-      : [],
-  [bounceZones, mintLoaded]);
+  // ── Manual "Sell All" — fires an immediate 100 % sell regardless of engine state ──
+  useEffect(() => {
+    if (!manualSellRequested) return;
+    if (tradingMode !== "real" || !mintLoaded || !realPositionOpenRef.current) {
+      clearManualSellRequest();
+      hardStopTrading();
+      return;
+    }
+
+    clearManualSellRequest();
+    realPositionOpenRef.current = false;
+
+    const apiKey = getEffectivePumpPortalApiKey().trim();
+    if (!apiKey) {
+      setLivePumpPortalErr(appendPumpPortalTradingWalletHint("PumpPortal API key missing — add it in Setup."));
+      hardStopTrading();
+      return;
+    }
+
+    const pool =
+      lastBuyVenueRef.current?.mint === mintLoaded && lastBuyVenueRef.current.pool
+        ? lastBuyVenueRef.current.pool
+        : lightningPoolPreference;
+
+    const buySig = pendingLiveBuySigRef.current;
+    pendingLiveBuySigRef.current = null;
+    lastBuyVenueRef.current = null;
+
+    void (async () => {
+      const res = await postPumpPortalLightningTradeWithFallback(apiKey, {
+        action: "sell",
+        mint: mintLoaded,
+        amount: "100%",
+        denominatedInSol: "false",
+        slippage: scalperUserConfig.realSlippagePct,
+        priorityFee: scalperUserConfig.realPriorityFeeSol,
+        pool,
+      });
+
+      if (!res.ok) {
+        const tried = res.attempts.length > 1 ? ` — venues tried: ${res.attempts.join(" → ")}` : "";
+        setLivePumpPortalErr(appendPumpPortalTradingWalletHint(`Manual sell failed: ${res.message}${tried}`));
+        hardStopTrading();
+        return;
+      }
+
+      setLivePumpPortalSig(`MANUAL SELL confirming… ${res.signature}`);
+      const { confirmed } = await confirmLightningTx(res.signature);
+      if (!confirmed) {
+        setLivePumpPortalErr(appendPumpPortalTradingWalletHint("Manual sell did not confirm — check Solscan."));
+        hardStopTrading();
+        return;
+      }
+
+      setLivePumpPortalSig(res.signature);
+
+      const walletPk = getPumpPortalTradingWalletPubkey();
+      if (buySig && walletPk) {
+        const buyDelta = await fetchWalletSolDeltaSol(buySig, walletPk);
+        const sellDelta = await fetchWalletSolDeltaSol(res.signature, walletPk);
+        if (buyDelta != null && sellDelta != null) {
+          const solSpent = Math.max(0, -buyDelta);
+          const solReceived = Math.max(0, sellDelta);
+          const netSol = buyDelta + sellDelta;
+          const roiPct = solSpent > 0 ? (netSol / solSpent) * 100 : 0;
+          const chainTrade: BotTradeRowChain = {
+            kind: "chain",
+            id: `chain-manual-${res.signature}`,
+            closedAtTs: Date.now(),
+            exitReason: "order_book_sell",
+            buySignature: buySig,
+            sellSignature: res.signature,
+            solSpent,
+            solReceived,
+            netSol,
+            roiPct,
+          };
+          setLiveChainTrades((prev) => [...prev, chainTrade]);
+          appendPersistedTrades([{ ...chainTrade, walletPk, mint: mintLoaded }]);
+        }
+      }
+
+      hardStopTrading();
+    })();
+  }, [
+    manualSellRequested,
+    clearManualSellRequest,
+    tradingMode,
+    mintLoaded,
+    hardStopTrading,
+    lightningPoolPreference,
+    scalperUserConfig.realSlippagePct,
+    scalperUserConfig.realPriorityFeeSol,
+    appendPersistedTrades,
+  ]);
+
+  const mintZones = useMemo(
+    () => (mintLoaded ? bounceZones.filter((z) => z.mint === mintLoaded) : []),
+    [bounceZones, mintLoaded],
+  );
+  /**
+   * `undefined` — no bounce rows for this mint → scalper uses dip+catalyst only.
+   * `[]` — rows exist but all disabled → proximity filter never passes → no buys.
+   * `[prices]` — MC must be within ±10% of an enabled zone to arm.
+   */
+  const activeBounceZonePricesForScalper = useMemo(() => {
+    if (!mintLoaded || mintZones.length === 0) return undefined;
+    return mintZones.filter((z) => z.enabled).map((z) => z.price);
+  }, [mintLoaded, mintZones]);
 
   const paperScalper = useMemo(() => {
     if (!scalperEngineRunning || !mintLoaded || scalperCutoffMs == null) return null;
     return reduceScalperPaper(liveRowsForMc, {
       minTradeTsMs: scalperCutoffMs,
       paperBuySol: tradingMode === "paper" ? scalperLiveBuySol : undefined,
-      activeBounceZonePrices: activeBounceZonePrices.length > 0 ? activeBounceZonePrices : undefined,
+      activeBounceZonePrices: activeBounceZonePricesForScalper,
       scalperConfig: scalperUserConfig,
     });
-  }, [scalperEngineRunning, mintLoaded, liveRowsForMc, scalperCutoffMs, tradingMode, scalperLiveBuySol, activeBounceZonePrices, scalperUserConfig]);
+  }, [
+    scalperEngineRunning,
+    mintLoaded,
+    liveRowsForMc,
+    scalperCutoffMs,
+    tradingMode,
+    scalperLiveBuySol,
+    activeBounceZonePricesForScalper,
+    scalperUserConfig,
+  ]);
 
-  const prevLiveOpenRef = useRef<boolean | undefined>(undefined);
-  const lastLiveTxAtRef = useRef(0);
-  const pendingLiveBuySigRef = useRef<string | null>(null);
   const lastPersistedPaperCountRef = useRef(0);
 
   // Drag refs — kept stable so event listeners don't need re-adding on every render
@@ -449,6 +608,113 @@ export function CaChartPanel() {
   useEffect(() => { bounceZonesRef.current = bounceZones; }, [bounceZones]);
   useEffect(() => { mintLoadedRef.current = mintLoaded; }, [mintLoaded]);
   useEffect(() => { updateBounceZonePriceRef.current = updateBounceZonePrice; }, [updateBounceZonePrice]);
+
+  /** Live last-close price — kept current via ref so drag/add callbacks always have it. */
+  const livePriceRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (lastCandleSummary) livePriceRef.current = lastCandleSummary.close;
+  }, [lastCandleSummary]);
+
+  // ── Lazy historical load (pan-left → fetch older chunks) ──────────────────
+  /** Oldest bar timestamp (seconds) in baseRows — cursor for the next older-chunk fetch. */
+  const oldestLoadedTsRef = useRef<number | null>(null);
+  /** Guard: true while an older-history chunk request is in-flight. */
+  const isFetchingOlderRef = useRef(false);
+  /** True once a chunk returns fewer bars than the limit — we've reached token genesis. */
+  const hasReachedGenesisRef = useRef(false);
+  /** Ref mirror of chartInterval for use inside the timeScale subscription closure. */
+  const chartIntervalRef = useRef(chartInterval);
+  useEffect(() => { chartIntervalRef.current = chartInterval; }, [chartInterval]);
+
+  // Update oldest-ts cursor whenever baseRows grows (initial load or chunk prepend).
+  useEffect(() => {
+    if (baseRows.length > 0) {
+      oldestLoadedTsRef.current = baseRows[0]!.time as number;
+    }
+  }, [baseRows]);
+
+  /**
+   * Re-draw all bounce zone price lines after `series.setData()` wipes them.
+   * Reads from refs so it can be called inside any effect without adding deps.
+   */
+  /** Merge zones whose prices almost coincide — prevents stacked duplicate axis labels. */
+  const dedupeZonesForDraw = (zones: UserBounceZone[]): UserBounceZone[] => {
+    // Two zones in the same 15% price band → keep only the stronger one.
+    const RANGE_FRAC = 0.15;
+    // Absolute maximum lines ever drawn on the chart.
+    const MAX_DRAW = 3;
+
+    if (zones.length === 0) return [];
+
+    // Step 1: sort by strength descending so the strongest zone in each band wins.
+    const byStrength = [...zones].sort((a, b) => (b.strength ?? 0) - (a.strength ?? 0));
+
+    // Step 2: greedy keep — add a zone only if no already-kept zone is within RANGE_FRAC.
+    const kept: UserBounceZone[] = [];
+    for (const z of byStrength) {
+      if (z.price <= 0) continue;
+      const tooClose = kept.some(
+        (k) => Math.abs(k.price - z.price) / Math.min(k.price, z.price) < RANGE_FRAC,
+      );
+      if (!tooClose) kept.push({ ...z });
+      if (kept.length >= MAX_DRAW) break;
+    }
+
+    return kept;
+  };
+
+  const redrawBounceLinesOnSeries = (s: ISeriesApi<"Candlestick">) => {
+    const mint = mintLoadedRef.current;
+    if (!mint) return;
+    const raw = bounceZonesRef.current.filter((z) => z.mint === mint && z.enabled);
+    const zones = dedupeZonesForDraw(raw);
+    bouncePriceLineHandlesRef.current.clear();
+    const si = s as unknown as { _bounceLines?: BouncePriceLineHandle[] };
+    if (si._bounceLines) {
+      for (const line of si._bounceLines) {
+        try {
+          s.removePriceLine(line);
+        } catch {
+          /* stale handle after setData — ignore */
+        }
+      }
+    }
+    si._bounceLines = [];
+    // Track prices already drawn this pass — skip any that land within 15% of an existing line.
+    const drawnPrices: number[] = [];
+    for (const zone of zones) {
+      if (zone.price <= 0) continue;
+      // Hard check: never draw two lines within 15% of each other no matter what
+      const tooClose = drawnPrices.some(
+        (p) => Math.abs(p - zone.price) / Math.min(p, zone.price) < 0.15,
+      );
+      if (tooClose) continue;
+      drawnPrices.push(zone.price);
+
+      const sources = (zone as { sources?: string }).sources;
+      const isAuto = sources != null;
+      const opacity = Math.max(0.45, zone.strength ?? 0.55);
+      const tfCount = isAuto ? sources!.split("+").length : 1;
+      const color = `rgba(56,189,248,${opacity})`;
+      const title = isAuto
+        ? sources === "swing"
+          ? "Swing low"
+          : sources!.startsWith("swing+")
+            ? `Swing · ${sources!.slice("swing+".length)}`
+            : sources!
+        : "zone";
+      const line = s.createPriceLine({
+        price: zone.price,
+        color,
+        lineWidth: tfCount >= 3 ? 2 : 1,
+        lineStyle: isAuto ? 0 : 2,
+        axisLabelVisible: true,
+        title,
+      });
+      si._bounceLines.push(line);
+      bouncePriceLineHandlesRef.current.set(zone.id, line);
+    }
+  };
 
   // Persist newly closed paper trades as they accumulate in the session.
   useEffect(() => {
@@ -487,7 +753,10 @@ export function CaChartPanel() {
     const minGap = 1500;
 
     const maybeBuy = !prev && open;
-    const maybeSell = prev && !open;
+    // Only attempt a real sell if a real buy was actually confirmed on-chain.
+    // Without this guard, a failed buy (400) would still flip prevLiveOpenRef=true
+    // and trigger a phantom sell on the next exit signal → "could not find account".
+    const maybeSell = prev && !open && realPositionOpenRef.current;
 
     if (maybeBuy || maybeSell) {
       // Debounce buys only — never skip a sell, or we end up holding an
@@ -505,8 +774,10 @@ export function CaChartPanel() {
       }
       lastLiveTxAtRef.current = now;
       prevLiveOpenRef.current = open;
+      // Clear real position flag as soon as a sell fires — even if it fails on-chain,
+      // we don't want to re-buy while potentially still holding tokens.
+      if (maybeSell) realPositionOpenRef.current = false;
 
-      const R = SCALPER_PAPER_CONFIG;
       const action = maybeBuy ? "buy" : "sell";
       const tapeSnapshot = paperScalper.botTrades;
       const lastTape = tapeSnapshot[tapeSnapshot.length - 1];
@@ -514,17 +785,29 @@ export function CaChartPanel() {
         lastTape?.kind === "tape" ? lastTape.exitReason : "order_book_sell";
 
       void (async () => {
-        const res = await postPumpPortalLightningTrade(apiKey, {
+        const poolForTx =
+          maybeBuy
+            ? lightningPoolPreference
+            : lastBuyVenueRef.current?.mint === mintLoaded && lastBuyVenueRef.current.pool
+              ? lastBuyVenueRef.current.pool
+              : lightningPoolPreference;
+
+        const res = await postPumpPortalLightningTradeWithFallback(apiKey, {
           action,
           mint: mintLoaded,
           amount: maybeBuy ? scalperLiveBuySol : "100%",
           denominatedInSol: maybeBuy ? "true" : "false",
           slippage: scalperUserConfig.realSlippagePct,
           priorityFee: scalperUserConfig.realPriorityFeeSol,
-          pool: R.realPool,
+          pool: poolForTx,
         });
         if (!res.ok) {
-          setLivePumpPortalErr(appendPumpPortalTradingWalletHint(res.message));
+          const tried =
+            res.attempts.length > 1 ? ` — venues tried: ${res.attempts.join(" → ")}` : "";
+          setLivePumpPortalErr(appendPumpPortalTradingWalletHint(res.message + tried));
+          // Buy failed — make sure we don't hold a phantom open position flag
+          // that would trigger a sell for tokens we never received.
+          if (maybeBuy) realPositionOpenRef.current = false;
           return;
         }
         setLivePumpPortalSig(`${action.toUpperCase()} confirming… ${res.signature}`);
@@ -535,15 +818,23 @@ export function CaChartPanel() {
           setLivePumpPortalErr(
             appendPumpPortalTradingWalletHint(err ?? "Tx did not confirm — check explorer"),
           );
+          // Buy not confirmed — same as failed
+          if (maybeBuy) realPositionOpenRef.current = false;
           return;
         }
 
         setLivePumpPortalSig(res.signature);
 
         if (maybeBuy) {
+          // Buy confirmed on-chain — now we genuinely hold tokens
+          realPositionOpenRef.current = true;
           pendingLiveBuySigRef.current = res.signature;
+          lastBuyVenueRef.current = { mint: mintLoaded, pool: res.poolUsed };
           return;
         }
+
+        // realPositionOpenRef was already cleared synchronously when the sell was dispatched
+        lastBuyVenueRef.current = null;
 
         const buySig = pendingLiveBuySigRef.current;
         pendingLiveBuySigRef.current = null;
@@ -608,7 +899,19 @@ export function CaChartPanel() {
     }
 
     prevLiveOpenRef.current = open;
-  }, [paperScalper, tradingMode, algoSessionActive, tradingHalted, mintLoaded, liveState, scalperLiveBuySol]);
+  }, [
+    paperScalper,
+    tradingMode,
+    algoSessionActive,
+    tradingHalted,
+    mintLoaded,
+    liveState,
+    scalperLiveBuySol,
+    lightningPoolPreference,
+    scalperUserConfig.realSlippagePct,
+    scalperUserConfig.realPriorityFeeSol,
+    appendPersistedTrades,
+  ]);
 
   useEffect(() => {
     setChartAnalytics({
@@ -718,6 +1021,47 @@ export function CaChartPanel() {
       zOrder: "aboveSeries",
     });
 
+    // ── Lazy historical load on pan-left ─────────────────────────────────────
+    // Start fetching an older chunk when the user pans within LOAD_TRIGGER_BARS
+    // of the oldest loaded candle (or past it into empty space). Each triggered
+    // fetch is completely isolated — one independent request with its own cursor.
+    // Works for all intervals: 1s, 1m, 5m, 15m.
+    const LOAD_TRIGGER_BARS = 200;
+
+    chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (!range || range.from >= LOAD_TRIGGER_BARS) return;
+      if (isFetchingOlderRef.current || hasReachedGenesisRef.current) return;
+      const mint = mintLoadedRef.current;
+      if (!mint) return;
+      const oldestTs = oldestLoadedTsRef.current;
+      if (oldestTs == null) return;
+
+      isFetchingOlderRef.current = true;
+
+      // Each call is fully isolated — if it fails, the next pan-left retries.
+      void fetchPumpCandles(mint, {
+        interval: chartIntervalRef.current,
+        beforeTs: oldestTs * 1000 - 1, // seconds → ms, step back 1 ms before oldest bar
+      }).then((result) => {
+        isFetchingOlderRef.current = false;
+
+        // Fewer raw fetched bars than the max means we've reached the token's genesis.
+        // Use rawFetchedCount (not candles.length) so resampled intervals like "5s"
+        // (which compress 1000 1s candles → ~200 5s bars) don't falsely trigger genesis.
+        if (result.rawFetchedCount < PUMP_CANDLES_MAX_LIMIT) {
+          hasReachedGenesisRef.current = true;
+        }
+
+        if (result.candles.length > 0) {
+          // Merge older chunk into baseRows — triggers chart setData + scroll preserve.
+          setBaseRows((prev) => mergeBaseCandles(prev, result.candles));
+        }
+      }).catch(() => {
+        // Release guard on error so the next pan-left can retry.
+        isFetchingOlderRef.current = false;
+      });
+    });
+
     return () => {
       seriesMarkersPluginRef.current?.detach();
       seriesMarkersPluginRef.current = null;
@@ -765,7 +1109,18 @@ export function CaChartPanel() {
     didFitRef.current = false;
   }, [mintLoaded, chartInterval]);
 
+  // How many pages to fetch based on interval — more pages for shorter candles.
+  const pagesForInterval = (iv: ChartInterval) =>
+    iv === "1s" || iv === "5s" ? 10 : iv === "1m" ? 5 : 3;
+
   useEffect(() => {
+    // Reset lazy-load cursors whenever mint or interval changes.
+    isFetchingOlderRef.current = false;
+    hasReachedGenesisRef.current = false;
+    oldestLoadedTsRef.current = null;
+    // Allow a fresh auto-detect run for the new mint/interval.
+    autoDetectedMintRef.current = "";
+
     if (!debouncedMint) {
       fetchGenRef.current += 1;
       setMintLoaded(null);
@@ -777,19 +1132,35 @@ export function CaChartPanel() {
     }
 
     const gen = ++fetchGenRef.current;
+
+    // Serve from cache immediately (no loading flash on tab re-visits).
+    const cached = getCachedCandles(debouncedMint, chartInterval);
+    if (cached) {
+      setMintLoaded(debouncedMint);
+      setYMcCap(cached.yAxisIsMarketCapUsd);
+      if (cached.tokenUiSupply != null) setTokenUiSupply(cached.tokenUiSupply);
+      setBaseRows(cached.candles);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setBaseRows([]);
 
     void (async () => {
       try {
-        const { candles, yAxisIsMarketCapUsd, tokenUiSupply: supply } =
-          await fetchPumpCandles(debouncedMint, { interval: chartInterval });
+        const result = await fetchPumpCandlesPaged(debouncedMint, {
+          interval: chartInterval,
+          pages: pagesForInterval(chartInterval),
+        });
         if (gen !== fetchGenRef.current) return;
+        setCachedCandles(debouncedMint, chartInterval, result);
         setMintLoaded(debouncedMint);
-        setYMcCap(yAxisIsMarketCapUsd);
-        setTokenUiSupply(supply);
-        setBaseRows(candles);
+        setYMcCap(result.yAxisIsMarketCapUsd);
+        setTokenUiSupply(result.tokenUiSupply);
+        setBaseRows(result.candles);
       } catch (e) {
         if (gen !== fetchGenRef.current) return;
         setMintLoaded(null);
@@ -800,6 +1171,7 @@ export function CaChartPanel() {
         if (gen === fetchGenRef.current) setLoading(false);
       }
     })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedMint, chartInterval]);
 
   useEffect(() => {
@@ -808,18 +1180,19 @@ export function CaChartPanel() {
     const poll = window.setInterval(() => {
       void (async () => {
         try {
-          const { candles, yAxisIsMarketCapUsd, tokenUiSupply: supply } =
+          // Fetch only the latest page and MERGE into the existing base rows so
+          // the full history (up to 10 k candles) is never discarded by a poll.
+          const { candles: fresh, yAxisIsMarketCapUsd, tokenUiSupply: supply } =
             await fetchPumpCandles(mintLoaded, { interval: chartInterval });
           if (cancelled) return;
-          setBaseRows(candles);
+          setBaseRows((prev) => mergeBaseCandles(prev, fresh));
           setYMcCap(yAxisIsMarketCapUsd);
-          // Only update supply if RPC actually returned one — don't overwrite a cached value with null
           if (supply != null) setTokenUiSupply(supply);
         } catch {
           /* keep last series */
         }
       })();
-    }, 30_000); // 30s is enough — candles are visual history, supply changes rarely
+    }, 30_000);
     return () => {
       cancelled = true;
       window.clearInterval(poll);
@@ -839,7 +1212,18 @@ export function CaChartPanel() {
      */
     const scrollBefore = ts.scrollPosition();
 
+    const baseRowsChanged = baseRows !== prevBaseRowsRef.current;
+    prevBaseRowsRef.current = baseRows;
+
+    if (baseRowsChanged) {
+      // Full REST refresh: setData wipes all createPriceLine handles — re-draw immediately after.
     s.setData(chartRows);
+      redrawBounceLinesOnSeries(s);
+    } else {
+      // Live tick only: series.update() preserves price lines, no re-draw needed.
+      const last = chartRows[chartRows.length - 1];
+      if (last) s.update(last);
+    }
 
     if (!didFitRef.current) {
       ts.fitContent();
@@ -850,7 +1234,7 @@ export function CaChartPanel() {
     const restoreScroll = () => {
       try {
         ts.scrollToPosition(scrollBefore, false);
-      } catch {
+        } catch {
         /* ignore */
       }
     };
@@ -859,69 +1243,120 @@ export function CaChartPanel() {
     requestAnimationFrame(() => {
       restoreScroll();
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chartRows]);
 
-  // Fetch dedicated 5m candles for floor detection on mint load or manual refresh.
-  // Always 5m — independent of the display interval — so the FloorTool always
-  // has ~3.5 days of structural price context regardless of what the user is viewing.
+  // Prefetch 3 × 1000 candles at the **same interval as the chart** for bounce detection.
+  // Detection fires automatically once rows are ready (no button click needed).
   useEffect(() => {
     if (!mintLoaded) {
       setFloorDetectionRows([]);
+      setFloorCandlesStatus("idle");
       return;
     }
     const gen = ++floorFetchGenRef.current;
+    setFloorDetectionRows([]);
+    setFloorCandlesStatus("loading");
     void (async () => {
       try {
-        const { candles } = await fetchPumpCandles(mintLoaded, { interval: FLOOR_DETECTION_INTERVAL });
+        // Fetch 1s candles for floor detection — most granular view for
+        // ZigZag algo + vision API. Use the in-memory cache if it's warm
+        // (chart initial load already fetched these), else paginate fresh.
+        // 10 pages × 1000 bars = 10,000 × 1 s ≈ 2.8 h of price history.
+        const cached1s = getCachedCandles(mintLoaded, "1s");
+        const { candles } = cached1s ?? await fetchPumpCandlesPaged(mintLoaded, {
+          interval: "1s",
+          pages: 10,
+        });
         if (gen !== floorFetchGenRef.current) return;
         setFloorDetectionRows(candles);
+        setFloorCandlesStatus("ready");
       } catch {
-        // Keep previous rows on failure; don't break the chart
+        if (gen !== floorFetchGenRef.current) return;
+        setFloorCandlesStatus("ready"); // let user try anyway; detection handles empty rows
       }
     })();
-  }, [mintLoaded, bounceSuggestionTick]); // bounceSuggestionTick forces fresh candle fetch on "Suggest lines"
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mintLoaded, chartInterval]);
 
-  // Detect bounce zones from dedicated floor detection candles.
-  // currentPrice from baseRows guards against levels price just broke through in the last REST poll.
+  // Track the last manual-refresh tick so we can distinguish user clicks from
+  // effect re-runs triggered by candle updates.
+  const prevBounceSuggestionTickRef = useRef(0);
+  // Per-mint flag: once we auto-detect on first load we never auto-detect again
+  // for that mint (until a new CA is entered). Vision always stays manual-only.
+  const autoDetectedMintRef = useRef<string>("");
+
+  // Bounce zone detection.
+  //   • First load for a mint  → algo runs automatically (free, no API credits).
+  //   • Manual "Refresh" click → algo + vision both run (costs API credits).
+  //   • Subsequent candle polls → neither runs (isManualRefresh=false AND mint already auto-detected).
   useEffect(() => {
-    if (!mintLoaded || floorDetectionRows.length < 60) return;
-    const currentPrice = baseRows[baseRows.length - 1]?.close;
-    const zones = detectBounceZones(floorDetectionRows, currentPrice);
-    setDetectedZones(mintLoaded, zones);
-  }, [floorDetectionRows, baseRows, mintLoaded, setDetectedZones]);
+    if (!mintLoaded || floorDetectionRows.length < MIN_BOOTSTRAP_CANDLES) return;
 
-  // Draw bounce zone price lines on the chart.
+    const isManualRefresh = bounceSuggestionTick > prevBounceSuggestionTickRef.current;
+    prevBounceSuggestionTickRef.current = bounceSuggestionTick;
+
+    const isFirstLoad = autoDetectedMintRef.current !== mintLoaded;
+
+    // Nothing to do — not a manual click and this mint was already auto-detected.
+    if (!isManualRefresh && !isFirstLoad) return;
+
+    const currentPrice = floorDetectionRows[floorDetectionRows.length - 1]?.close;
+    const algoZones = detectBounceZones(floorDetectionRows, currentPrice);
+    setDetectedZones(mintLoaded, algoZones);
+
+    if (isFirstLoad) {
+      // Mark this mint as auto-detected so subsequent poll re-runs are ignored.
+      autoDetectedMintRef.current = mintLoaded;
+      // Stop here on first load — vision is credit-burning and stays manual only.
+      return;
+    }
+
+    // --- Manual refresh path: also run vision detection ---
+    if (!model.apiKey.trim()) return;
+
+    setChartAnalytics({ visionDetectStatus: "loading", visionDetectError: null });
+
+    void detectBounceZonesVision(floorDetectionRows, model, currentPrice).then((result) => {
+      if (result.ok && result.prices.length > 0) {
+        const mintNow = mintLoaded;
+        const modelTag = result.modelUsed.split("/").pop()?.slice(0, 12) ?? "ai";
+        const visionOnlyZones = result.prices.map((price) => ({
+          price,
+          confluenceScore: 0.5,
+          sources: `vision·${modelTag}`,
+          strength: 0.5,
+          lastTouchAgo: 0,
+          isSupport: true,
+          touches: 0,
+        }));
+        setDetectedZones(mintNow, [...algoZones, ...visionOnlyZones]);
+        setChartAnalytics({ visionDetectStatus: "done", visionDetectError: null });
+      } else {
+        setChartAnalytics({
+          visionDetectStatus: result.ok ? "done" : "error",
+          visionDetectError: result.ok ? null : result.error,
+        });
+      }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [floorDetectionRows, mintLoaded, bounceSuggestionTick, chartInterval, setDetectedZones]);
+
+  // Draw bounce zone price lines on the chart — fires when zones are (re)computed or mint changes.
   useEffect(() => {
     const series = seriesRef.current;
     if (!series || !mintLoaded) return;
 
-    const activeMintZones = bounceZones.filter((z) => z.mint === mintLoaded && z.enabled);
-
-    bouncePriceLineHandlesRef.current.clear();
-
-    const s = series as unknown as { _bounceLines?: BouncePriceLineHandle[] };
-    if (s._bounceLines) {
-      for (const line of s._bounceLines) {
+    // Explicitly remove old lines before re-drawing (in case setData wasn't called this cycle).
+    const si = series as unknown as { _bounceLines?: BouncePriceLineHandle[] };
+    if (si._bounceLines) {
+      for (const line of si._bounceLines) {
         try { series.removePriceLine(line); } catch { /* ignore */ }
       }
     }
-    s._bounceLines = [];
 
-    for (const zone of activeMintZones) {
-      const isAuto = zone.touches > 0;
-      const opacity = isAuto ? Math.max(0.45, zone.strength) : 0.55;
-      const color = `rgba(56,189,248,${opacity})`;
-      const line = series.createPriceLine({
-        price: zone.price,
-        color,
-        lineWidth: isAuto && zone.touches >= 3 ? 2 : 1,
-        lineStyle: isAuto ? 0 : 2,
-        axisLabelVisible: true,
-        title: isAuto ? `×${zone.touches}` : "zone",
-      });
-      s._bounceLines.push(line);
-      bouncePriceLineHandlesRef.current.set(zone.id, line);
-    }
+    redrawBounceLinesOnSeries(series);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bounceZones, mintLoaded]);
 
   // Drag bounce zone lines: pointer capture + disable chart pan/zoom while dragging;
@@ -954,7 +1389,12 @@ export function CaChartPanel() {
         }
       }
       if (id != null && price != null && price > 0) {
-        updateBounceZonePriceRef.current(id, price);
+        // Hard clamp: zone can never be at or above 93 % of live price (7 % minimum gap).
+        const liveNow = livePriceRef.current;
+        const clamped = liveNow != null && liveNow > 0
+          ? Math.min(price, liveNow * 0.93)
+          : price;
+        updateBounceZonePriceRef.current(id, clamped);
       }
     };
 
@@ -979,8 +1419,8 @@ export function CaChartPanel() {
           pendingDragPriceRef.current = zone.price;
           host.setPointerCapture(e.pointerId);
           host.style.cursor = "ns-resize";
-          return;
-        }
+      return;
+    }
       }
     };
 
@@ -1113,32 +1553,32 @@ export function CaChartPanel() {
         </div>
       </div>
 
-      <div className="shrink-0 border-b border-[var(--color-border)] px-4 py-2">
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="shrink-0 border-b border-[var(--color-border)] px-4 py-2">
+          <div className="flex flex-wrap items-center gap-2">
           <span className="unt-strip-heading shrink-0">Timeframe</span>
-          <div className="flex flex-wrap gap-1">
-            {CHART_INTERVALS.map((iv) => {
-              const active = chartInterval === iv;
-              return (
-                <button
-                  key={iv}
-                  type="button"
-                  aria-pressed={active}
-                  onClick={() => setChartInterval(iv)}
-                  className={[
-                    "rounded-md border px-2.5 py-1 font-mono text-[12px] transition-colors",
-                    active
+            <div className="flex flex-wrap gap-1">
+              {CHART_INTERVALS.map((iv) => {
+                const active = chartInterval === iv;
+                return (
+                  <button
+                    key={iv}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setChartInterval(iv)}
+                    className={[
+                      "rounded-md border px-2.5 py-1 font-mono text-[12px] transition-colors",
+                      active
                       ? "border-[color-mix(in_srgb,var(--color-fg)_18%,transparent)] bg-[color-mix(in_srgb,#2EA8FF_14%,transparent)] text-[var(--color-fg)]"
-                      : "border-[var(--color-border)] bg-transparent text-[var(--color-fg-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-fg)]",
-                  ].join(" ")}
-                >
-                  {iv}
-                </button>
-              );
-            })}
+                        : "border-[var(--color-border)] bg-transparent text-[var(--color-fg-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-fg)]",
+                    ].join(" ")}
+                  >
+                    {iv}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
-      </div>
 
       <TokenInfoBar mint={streamMint} />
 
@@ -1181,11 +1621,13 @@ export function CaChartPanel() {
                   }
                 >
                   {tradingMode === "real" ? "Real trading live" : "Paper trading live"}
-                </span>
+          </span>
                 {tradingMode === "real" ? (
                   <>
                     <p className="text-[11px] leading-snug text-[var(--color-fg-dim)]">
-                      Lightning pool {SCALPER_PAPER_CONFIG.realPool} · ~{scalperLiveBuySol} SOL entries
+                      Lightning venue {lightningPoolPreference}
+                      {SCALPER_PAPER_CONFIG.realPool === "auto" ? " (retries pump-amm → raydium on migrate)" : ""} · ~
+                      {scalperLiveBuySol} SOL entries
                     </p>
                     {livePumpPortalSig ? (
                       <p className="font-mono text-[10px] text-emerald-400/90">
@@ -1203,30 +1645,32 @@ export function CaChartPanel() {
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-[13px] font-semibold text-[var(--color-fg-heading)]">
                     Real · PumpPortal wallet
-                  </span>
-                </div>
-                <p className="mt-0.5 text-[11px] leading-snug text-[var(--color-fg-dim)]">
-                  Entries fire ~{scalperLiveBuySol} SOL buys; exits sell 100% via PumpPortal Lightning API
-                  (pool: {SCALPER_PAPER_CONFIG.realPool}). Wallet = the one linked to your Setup API key.
+          </span>
+        </div>
+            <p className="mt-0.5 text-[11px] leading-snug text-[var(--color-fg-dim)]">
+                  Entries fire ~{scalperLiveBuySol} SOL buys; exits sell 100% via PumpPortal Lightning (venue hint{" "}
+                  {lightningPoolPreference}
+                  {SCALPER_PAPER_CONFIG.realPool === "auto" ? "; auto-fallback on graduated curve" : ""}). Wallet =
+                  the one linked to your Setup API key.
                 </p>
               </>
             ) : null}
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2">
-            <button
-              type="button"
-              className="unt-btn-primary shrink-0 px-4 py-2 text-[13px] font-medium"
+          <button
+            type="button"
+            className="unt-btn-primary shrink-0 px-4 py-2 text-[13px] font-medium"
               disabled={!scalperEngineRunning && selectedAlgoId !== BUILTIN_SCALPER_PRESET_ID}
               title={
                 !scalperEngineRunning && selectedAlgoId !== BUILTIN_SCALPER_PRESET_ID
                   ? "Select Order-book scalper under Dashboard, then Start here or in the sidebar"
                   : undefined
               }
-              onClick={() => {
+            onClick={() => {
                 if (scalperEngineRunning) {
                   hardStopTrading();
-                  return;
-                }
+                return;
+              }
                 if (selectedAlgoId !== BUILTIN_SCALPER_PRESET_ID) return;
                 if (tradingMode === "real" && !getEffectivePumpPortalApiKey().trim()) {
                   setChartSessionNotice(
@@ -1237,11 +1681,11 @@ export function CaChartPanel() {
                   return;
                 }
                 setTradingHalted(false);
-                setAlgoSessionActive(true);
-              }}
-            >
+              setAlgoSessionActive(true);
+            }}
+          >
               {scalperEngineRunning ? "Stop" : "Start"}
-            </button>
+          </button>
           </div>
         </div>
       ) : null}

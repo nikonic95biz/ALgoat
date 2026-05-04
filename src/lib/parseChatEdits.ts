@@ -1,3 +1,18 @@
+/**
+ * Knob fields the LLM is allowed to patch directly via a ```config block.
+ * Mirrors ScalperUserConfig but kept as a plain type here to avoid a
+ * circular import from AppContext.
+ */
+export type ScalperConfigPatch = {
+  dipMinPct?: number;
+  catalystMinSol?: number;
+  takeProfitPct?: number;
+  minOrderBookSellSolForStop?: number;
+  realSlippagePct?: number;
+  realPriorityFeeSol?: number;
+  reentryCooldownMs?: number;
+};
+
 export type ChatEdit = {
   path: string;
   lang: string;
@@ -129,6 +144,51 @@ export function parseMintDirectives(content: string): string[] {
     if (SOLANA_MINT_RE.test(addr)) out.push(addr);
   }
   return [...new Set(out)];
+}
+
+const ALLOWED_NUMERIC_KEYS: (keyof ScalperConfigPatch)[] = [
+  "dipMinPct",
+  "catalystMinSol",
+  "takeProfitPct",
+  "minOrderBookSellSolForStop",
+  "realSlippagePct",
+  "realPriorityFeeSol",
+  "reentryCooldownMs",
+];
+
+/**
+ * Extract a ```config fenced block from an LLM response and parse it as a
+ * scalper knob patch. Only known numeric fields are kept — unknown keys are
+ * silently dropped so the LLM can't inject arbitrary state.
+ *
+ * Example LLM output:
+ * ```config
+ * {"catalystMinSol": 0.3, "dipMinPct": 12}
+ * ```
+ */
+export function parseConfigPatch(content: string): ScalperConfigPatch | null {
+  const CONFIG_RE = /^```config\s*\n([\s\S]*?)^```[ \t]*$/gm;
+  const m = CONFIG_RE.exec(content);
+  if (!m) return null;
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(m[1].trim());
+  } catch {
+    return null;
+  }
+
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+
+  const patch: ScalperConfigPatch = {};
+  for (const key of ALLOWED_NUMERIC_KEYS) {
+    const v = (raw as Record<string, unknown>)[key];
+    if (typeof v === "number" && isFinite(v)) {
+      (patch as Record<string, number>)[key] = v;
+    }
+  }
+
+  return Object.keys(patch).length > 0 ? patch : null;
 }
 
 function isFilePath(s: string): boolean {

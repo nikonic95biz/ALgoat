@@ -13,6 +13,14 @@ import { createAssistantGreetingMessage } from "@/lib/chatGreeting";
 import { inferBackendIdFromBaseUrl } from "@/lib/llmBackends";
 import type { ChatMessage, ChatSession, GitHubWorkspaceSettings, ModelSettings, UserAlgoPreset } from "@/types";
 import { githubGetFileContent, githubPutFileContent } from "@/lib/githubApi";
+import {
+  isFileSystemAccessSupported,
+  loadPersistedHandle,
+  openLocalWorkspace,
+  requestPermission,
+  writeLocalFile,
+  clearPersistedHandle,
+} from "@/lib/localWorkspace";
 import { SCALPER_PAPER_CONFIG } from "@/lib/scalperPaperConfig";
 
 const MODEL_STORAGE_KEY = "unt_model_settings_v1";
@@ -145,6 +153,8 @@ export type ScalperUserConfig = {
   minOrderBookSellSolForStop: number;
   realSlippagePct: number;
   realPriorityFeeSol: number;
+  /** Re-entry cooldown in milliseconds after a closed trade — maps directly to SCALPER_PAPER_CONFIG.reentryCooldownMs. */
+  reentryCooldownMs: number;
 };
 
 function defaultScalperUserConfig(): ScalperUserConfig {
@@ -154,7 +164,8 @@ function defaultScalperUserConfig(): ScalperUserConfig {
     takeProfitPct: SCALPER_PAPER_CONFIG.takeProfitPct,
     minOrderBookSellSolForStop: SCALPER_PAPER_CONFIG.minOrderBookSellSolForStop,
     realSlippagePct: SCALPER_PAPER_CONFIG.realSlippagePct,
-    realPriorityFeeSol: 0.001, // bumped from 0.00006 default
+    realPriorityFeeSol: 0.001,
+    reentryCooldownMs: 30_000, // 30 s default — prevents rapid double-entry on real money
   };
 }
 
@@ -196,6 +207,11 @@ export type UserBounceZone = {
   enabled: boolean;
   /** 0–1 strength from detection; 0 = manual. */
   strength: number;
+  /**
+   * For multi-timeframe auto zones: which resolutions contributed, e.g. "5m+15m+1h".
+   * Undefined for manually added zones.
+   */
+  sources?: string;
 };
 
 function loadBounceZones(): UserBounceZone[] {
@@ -271,6 +287,10 @@ export type ChartAnalyticsState = {
   livePumpPortalLastSig: string | null;
   /** Last live trade error message from PumpPortal. */
   livePumpPortalLastErr: string | null;
+  /** Status of the vision-based bounce detection (runs on manual Refresh). */
+  visionDetectStatus: "idle" | "loading" | "done" | "error";
+  /** Error message if vision detection failed. */
+  visionDetectError: string | null;
 };
 
 const defaultChartAnalytics: ChartAnalyticsState = {
@@ -289,6 +309,8 @@ const defaultChartAnalytics: ChartAnalyticsState = {
   realBotTrades: [],
   livePumpPortalLastSig: null,
   livePumpPortalLastErr: null,
+  visionDetectStatus: "idle",
+  visionDetectError: null,
 };
 
 type AppState = {
@@ -348,6 +370,10 @@ type AppState = {
   setTradingHalted: (v: boolean) => void;
   /** Emergency stop: halt live sends + end scalper session. */
   hardStopTrading: () => void;
+  /** Fire an immediate real sell for 100 % of token balance, then stop the session. */
+  manualSellRequested: boolean;
+  requestManualSell: () => void;
+  clearManualSellRequest: () => void;
   /** User-editable scalper strategy params (knobs). Persisted to localStorage. */
   scalperUserConfig: ScalperUserConfig;
   setScalperUserConfig: (patch: Partial<ScalperUserConfig>) => void;
@@ -355,9 +381,15 @@ type AppState = {
   bounceZones: UserBounceZone[];
   /** Replace detected zones for a mint (called when candles reload). Keeps user-manual zones intact. */
   setDetectedZones: (mint: string, zones: BounceZone[]) => void;
-  /** Bump this to re-run candle bounce detection for the active chart (Suggest lines button). */
+  /** Bump this to trigger bounce detection with already-loaded floor candles (Suggest lines button). */
   bounceSuggestionTick: number;
   refreshSuggestedBounceZones: () => void;
+  /**
+   * Loading state for the 3-page floor candle prefetch that backs "Suggest lines".
+   * "idle" — no mint loaded yet; "loading" — fetching candles; "ready" — candles fetched, button enabled.
+   */
+  floorCandlesStatus: "idle" | "loading" | "ready";
+  setFloorCandlesStatus: (s: "idle" | "loading" | "ready") => void;
   /** Toggle a zone on/off. */
   toggleBounceZone: (id: string) => void;
   /** Update the price of a zone (user edits the number input). */
@@ -383,9 +415,21 @@ type AppState = {
   lastAppliedPath: string | null;
   /**
    * Apply a file edit from chat. Auto-detects create vs update.
-   * Returns the GitHub commit SHA.
+   * If a local workspace is connected, writes to disk (Vite HMR) and queues for GitHub push.
+   * Otherwise falls back to a direct GitHub commit.
+   * Returns the GitHub commit SHA (empty string for local-only writes).
    */
   applyFileEdit: (path: string, code: string, commitMessage?: string) => Promise<string>;
+  /** The locally-connected repo folder (File System Access API). Null if not connected. */
+  localWorkspaceHandle: FileSystemDirectoryHandle | null;
+  /** Connect (or reconnect) the local workspace folder. */
+  connectLocalWorkspace: () => Promise<void>;
+  /** Disconnect the local workspace. */
+  disconnectLocalWorkspace: () => void;
+  /** Files written locally but not yet pushed to GitHub. */
+  pendingLocalEdits: Map<string, string>;
+  /** Push all pending local edits to GitHub and clear the queue. */
+  pushPendingToGitHub: () => Promise<void>;
 };
 
 const Ctx = createContext<AppState | null>(null);
@@ -413,6 +457,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [tradingMode, setTradingModeState] = useState<TradingMode>(loadTradingMode);
   const [algoSessionActive, setAlgoSessionActive] = useState(false);
   const [tradingHalted, setTradingHalted] = useState(false);
+  const [manualSellRequested, setManualSellRequested] = useState(false);
   const [scalperUserConfig, setScalperUserConfigState] = useState<ScalperUserConfig>(loadScalperUserConfig);
   const [bounceZones, setBounceZones] = useState<UserBounceZone[]>(loadBounceZones);
   const [persistedBotTrades, setPersistedBotTrades] = useState<PersistedBotTrade[]>(loadPersistedTrades);
@@ -422,6 +467,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [workspaceFilePaths, setWorkspaceFilePaths] = useState<string[]>([]);
   const [applyEditTick, setApplyEditTick] = useState(0);
   const [lastAppliedPath, setLastAppliedPath] = useState<string | null>(null);
+  const [localWorkspaceHandle, setLocalWorkspaceHandleState] = useState<FileSystemDirectoryHandle | null>(null);
+  const [pendingLocalEdits, setPendingLocalEdits] = useState<Map<string, string>>(new Map());
+
+  // Restore persisted handle on mount (requires one user permission click before use)
+  useEffect(() => {
+    if (!isFileSystemAccessSupported()) return;
+    loadPersistedHandle().then((h) => {
+      if (h) setLocalWorkspaceHandleState(h);
+    }).catch(() => { /* storage unavailable */ });
+  }, []);
+
+  const connectLocalWorkspace = useCallback(async () => {
+    const handle = await openLocalWorkspace();
+    setLocalWorkspaceHandleState(handle);
+  }, []);
+
+  const disconnectLocalWorkspace = useCallback(() => {
+    setLocalWorkspaceHandleState(null);
+    setPendingLocalEdits(new Map());
+    void clearPersistedHandle();
+  }, []);
 
   // ── Persist other settings ────────────────────────────────────────
   function lsSave(key: string, value: string) {
@@ -620,13 +686,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const applyFileEdit = useCallback(
     async (path: string, code: string, commitMessage?: string): Promise<string> => {
+      // ── Local-first path (instant HMR) ────────────────────────────
+      if (localWorkspaceHandle) {
+        const granted = await requestPermission(localWorkspaceHandle);
+        if (!granted) throw new Error("Local workspace permission denied — re-connect in Setup.");
+        await writeLocalFile(localWorkspaceHandle, path, code);
+        // Queue the edit so the user can push to GitHub later in one batch
+        setPendingLocalEdits((prev) => {
+          const next = new Map(prev);
+          next.set(path, code);
+          return next;
+        });
+        setLastAppliedPath(path);
+        setApplyEditTick((t) => t + 1);
+        return ""; // no commit SHA yet — file is local only
+      }
+
+      // ── GitHub fallback ───────────────────────────────────────────
       const { token, owner, repo, branch } = githubWorkspace;
       if (!token.trim() || !owner.trim() || !repo.trim()) {
-        throw new Error("Connect your GitHub repo in Setup first (PAT + Fork & connect).");
+        throw new Error("Connect your GitHub repo in Setup (or connect a local workspace folder for instant edits).");
       }
       const br = branch.trim() || "main";
 
-      // Try to fetch SHA; if 404, this is a new file (no SHA needed)
       let existingSha: string | undefined;
       try {
         const { sha } = await githubGetFileContent(token, owner, repo, br, path);
@@ -650,8 +732,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setApplyEditTick((t) => t + 1);
       return commitSha;
     },
-    [githubWorkspace],
+    [githubWorkspace, localWorkspaceHandle],
   );
+
+  const pushPendingToGitHub = useCallback(async () => {
+    const { token, owner, repo, branch } = githubWorkspace;
+    if (!token.trim() || !owner.trim() || !repo.trim()) {
+      throw new Error("Connect your GitHub repo in Setup first (PAT + Fork & connect).");
+    }
+    const br = branch.trim() || "main";
+    const edits = Array.from(pendingLocalEdits.entries());
+    for (const [path, code] of edits) {
+      let existingSha: string | undefined;
+      try {
+        const { sha } = await githubGetFileContent(token, owner, repo, br, path);
+        existingSha = sha;
+      } catch {
+        existingSha = undefined;
+      }
+      await githubPutFileContent({
+        token,
+        owner,
+        repo,
+        branch: br,
+        path,
+        message: `Edit ${path} via chat`,
+        contentUtf8: code,
+        sha: existingSha,
+      });
+    }
+    setPendingLocalEdits(new Map());
+  }, [githubWorkspace, pendingLocalEdits]);
 
   const setTradingMode = useCallback((m: TradingMode) => {
     setTradingModeState(m);
@@ -669,11 +780,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const refreshSuggestedBounceZones = useCallback(() => {
     setBounceSuggestionTick((n) => n + 1);
   }, []);
+  const [floorCandlesStatus, setFloorCandlesStatus] = useState<"idle" | "loading" | "ready">("idle");
 
   const setDetectedZones = useCallback((mint: string, zones: BounceZone[]) => {
     setBounceZones((prev) => {
-      // Keep manual zones (touches === 0) for this mint; replace auto ones
-      const manual = prev.filter((z) => z.mint === mint && z.touches === 0);
+      // Manual zones have no `sources` field; auto zones always have sources set.
+      const manual = prev.filter((z) => z.mint === mint && z.sources == null);
       const other = prev.filter((z) => z.mint !== mint);
       const fresh: UserBounceZone[] = zones.map((z) => ({
         id: `auto-${mint}-${z.price.toFixed(6)}`,
@@ -682,6 +794,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         touches: z.touches,
         enabled: true,
         strength: z.strength,
+        sources: (z as { sources?: string }).sources,
       }));
       return [...other, ...manual, ...fresh];
     });
@@ -691,23 +804,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setBounceZones((prev) => prev.map((z) => z.id === id ? { ...z, enabled: !z.enabled } : z));
   }, []);
 
+  /**
+   * Clamp a proposed bounce-zone price so it can never be at or above 93 % of the
+   * live chart close (i.e. must be at least 7 % below current price).
+   * If no live price is available the value passes through unchanged.
+   */
+  const clampBouncePrice = useCallback((price: number): number => {
+    const liveClose = chartAnalytics.lastCandle?.close;
+    if (liveClose != null && liveClose > 0) {
+      return Math.min(price, liveClose * 0.93);
+    }
+    return price;
+  }, [chartAnalytics.lastCandle]);
+
   const updateBounceZonePrice = useCallback((id: string, price: number) => {
     if (!Number.isFinite(price) || price <= 0) return;
-    setBounceZones((prev) => prev.map((z) => z.id === id ? { ...z, price } : z));
-  }, []);
+    const safe = clampBouncePrice(price);
+    setBounceZones((prev) => prev.map((z) => z.id === id ? { ...z, price: safe } : z));
+  }, [clampBouncePrice]);
 
   const addBounceZone = useCallback((mint: string, price: number) => {
     if (!Number.isFinite(price) || price <= 0) return;
+    const safe = clampBouncePrice(price);
     const zone: UserBounceZone = {
       id: `manual-${mint}-${Date.now()}`,
       mint,
-      price,
+      price: safe,
       touches: 0,
       enabled: true,
       strength: 0,
     };
     setBounceZones((prev) => [...prev, zone]);
-  }, []);
+  }, [clampBouncePrice]);
 
   const removeBounceZone = useCallback((id: string) => {
     setBounceZones((prev) => prev.filter((z) => z.id !== id));
@@ -716,6 +844,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const hardStopTrading = useCallback(() => {
     setTradingHalted(true);
     setAlgoSessionActive(false);
+  }, []);
+
+  const requestManualSell = useCallback(() => {
+    setManualSellRequested(true);
+  }, []);
+
+  const clearManualSellRequest = useCallback(() => {
+    setManualSellRequested(false);
   }, []);
 
   const appendPersistedTrades = useCallback((trades: PersistedBotTrade[]) => {
@@ -800,12 +936,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       tradingHalted,
       setTradingHalted,
       hardStopTrading,
+      manualSellRequested,
+      requestManualSell,
+      clearManualSellRequest,
       scalperUserConfig,
       setScalperUserConfig,
       bounceZones,
       setDetectedZones,
       bounceSuggestionTick,
       refreshSuggestedBounceZones,
+      floorCandlesStatus,
+      setFloorCandlesStatus,
       toggleBounceZone,
       updateBounceZonePrice,
       addBounceZone,
@@ -823,6 +964,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       applyEditTick,
       lastAppliedPath,
       applyFileEdit,
+      localWorkspaceHandle,
+      connectLocalWorkspace,
+      disconnectLocalWorkspace,
+      pendingLocalEdits,
+      pushPendingToGitHub,
     }),
     [
       model, setModel,
@@ -834,14 +980,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       sidebarMode, sidebarOpen, activitySection,
       userAlgos, addUserAlgo, removeUserAlgo, selectedAlgoId,
       caMintInput, scalperLiveBuySol, tradingMode, algoSessionActive, tradingHalted,
+      manualSellRequested, requestManualSell, clearManualSellRequest,
       scalperUserConfig, setScalperUserConfig,
       bounceZones, setDetectedZones, bounceSuggestionTick, refreshSuggestedBounceZones,
+      floorCandlesStatus, setFloorCandlesStatus,
       toggleBounceZone, updateBounceZonePrice, addBounceZone, removeBounceZone,
       persistedBotTrades, appendPersistedTrades, clearPersistedTrades,
       githubWorkspace, setGithubWorkspace,
       openFilePath, openFileContent, setOpenFile,
       workspaceFilePaths, setWorkspaceFilePaths,
       applyEditTick, lastAppliedPath, applyFileEdit,
+      localWorkspaceHandle, connectLocalWorkspace, disconnectLocalWorkspace,
+      pendingLocalEdits, pushPendingToGitHub,
     ],
   );
 

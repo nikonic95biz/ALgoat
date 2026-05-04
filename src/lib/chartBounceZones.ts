@@ -1,284 +1,443 @@
 /**
- * Bounce-zone (support level) detection from OHLC candle data.
+ * Swing / ZigZag-style bounce zones + light memecoin psychology overlay.
  *
- * Every candidate floor must pass the FloorTool — a sequential checklist that
- * gates on bounce quality, temporal spread, and crucially whether price has
- * since broken through the level.  Only floors that pass all checks reach the
- * user. Marginal / broken levels are silently dropped; the trader should place
- * those manually.
+ * Pipeline:
+ * 1. ZigZag pivots (reversal threshold scaled from median candle noise).
+ * 2. Keep swing lows whose dip from **prior local top** ≥ min retrace.
+ *    • After first confirmed pivot high → use that high.
+ *    • Before that → synthetic peak = **max high only within ~12h lookback** from that low
+ *      (avoids “launch high” dominating week-two shelves).
+ * 3. **Touches**: count bars whose low is near the pivot (wicks at shelf).
+ * 4. **Psychological MC magnets**: if a shelf sits near a round MC ladder, tag `swing+50K`.
+ * 5. **Last adjustment**: snap each line to the **minimum candle low** in a ±24h bar window
+ *    around the swing pivot (caps ridiculous outliers vs detector price).
  *
- * Algorithm overview:
- *  1. Pivot lows (wide neighbourhood) with confirmed forward recovery.
- *  2. Cluster pivots whose price agrees tightly.
- *  3. FloorTool validates each cluster (temporal spread, touch gap, broken-floor).
- *  4. Score and deduplicate by minimum zone separation.
+ * **Young pairs (&lt;80 bars):** ZigZag almost never confirms — we **bootstrap** from the
+ * deepest lows in-range until history grows, then switch to full swings. If ZigZag yields
+ * nothing on longer history, we fall back to the same bootstrap so pumps aren’t empty.
+ *
+ * Detection candles should match **chart interval** (caller passes `fetchPumpCandlesPaged`
+ * with the same interval as the visible chart).
  */
 
-// ─── Pivot detection ────────────────────────────────────────────────────────
+import type { ChartInterval } from "@/lib/pumpCandles";
 
-/** Bars either side — wider window produces fewer, cleaner swing lows. */
-const PIVOT_WING = 5;
+/** Default when caller doesn’t specify (Setup scripts / tests). */
+export const FLOOR_DETECTION_INTERVAL: ChartInterval = "5m";
 
-/** Max forward candles used to confirm a bounce after each pivot low. */
-const RECOVERY_LOOKAHEAD = 12;
+/** Three pages × 1 000 bars — matches CaChartPanel prefetch. */
+export const FLOOR_DETECTION_PAGES = 3;
 
-/** Minimum rally (high / pivot low - 1) within RECOVERY_LOOKAHEAD to accept the pivot. */
-const MIN_RECOVERY_FRAC = 0.04;
+export const MIN_DETECTION_CANDLES = 80;
 
-// ─── Clustering ─────────────────────────────────────────────────────────────
+/** Minimum bars before we attempt any shelf line (brand‑new pairs may only have a handful). */
+export const MIN_BOOTSTRAP_CANDLES = 3;
 
-/** Pivots within this fraction of the running mean merge into one cluster. */
-const CLUSTER_PCT = 0.03;
+/** Minimum gap between returned zone prices (fraction). */
+const MIN_ZONE_SEPARATION_FRAC = 0.15;
 
-/** Max fraction spread of pivot prices around the median inside a cluster. */
-const MAX_CLUSTER_SPREAD_FRAC = 0.02;
+/** Maximum levels to return. */
+const MAX_ZONES = 2;
 
-// ─── FloorTool check thresholds ─────────────────────────────────────────────
+/** Zones must be at least this far BELOW current price (7 %). */
+const FLOOR_MARGIN_FRAC = 0.07;
 
-/** Minimum number of individual touches to qualify. */
-const MIN_TOUCHES = 3;
+/** Skip levels more than this fraction below current price. */
+const MAX_FLOOR_DISTANCE_FRAC = 0.58;
 
-/**
- * Adjacent touches in a cluster must be at least this many candles apart.
- * Prevents a 10-bar sideways squeeze counting as 5 "touches".
- */
-const MIN_TOUCH_GAP_CANDLES = 10;
+/** Absolute MC floor — skip launch-band noise below $3 k. */
+const MIN_FLOOR_MC_USD = 3_000;
 
-/**
- * First and last touch must span at least this many candles.
- * A level tested once at t=50 and once at t=55 is a consolidation, not a floor.
- */
-const MIN_TOUCH_SPAN_CANDLES = 30;
+/** Merge rows whose prices almost coincide (axis dedupe). */
+const CLUSTER_FRAC = 0.004;
 
-/**
- * Broken-floor threshold: if price closes this far below the candidate level
- * for BROKEN_FLOOR_STREAK consecutive candles after the first touch, the floor
- * is considered violated and is dropped.
- */
-const BROKEN_FLOOR_CLOSE_FRAC = 0.025;
-const BROKEN_FLOOR_STREAK = 3;
+/** Wick proximity for touch counting (fraction of pivot price). */
+const TOUCH_RADIUS_FRAC = 0.04;
 
-// ─── Scoring & output ────────────────────────────────────────────────────────
+/** Round MC ladder — must sit below spot; aligned shelves get `swing+XX`. */
+const PSYCHO_MC_LEVELS = [
+  5_000, 7_500, 10_000, 12_500, 15_000, 20_000, 25_000, 30_000, 35_000, 40_000, 45_000,
+  50_000, 60_000, 75_000, 100_000, 125_000, 150_000, 200_000, 250_000, 300_000, 400_000,
+  500_000, 750_000, 1_000_000,
+] as const;
 
-/** Half-life for recency decay (candles from right edge). */
-const RECENCY_HALF_LIFE = 50;
+/** Max distance between pivot and psych level to tag (fraction). */
+const PSY_ALIGN_FRAC = 0.08;
 
-/** Minimum price gap between any two returned zones (fraction of price). */
-const MIN_ZONE_SEPARATION_FRAC = 0.055;
-
-/** Maximum zones to surface. Conservative — better fewer high-confidence lines. */
-const MAX_ZONES = 3;
-
-/**
- * Candle interval always used for floor detection — independent of display interval.
- * 1000 × 5m ≈ 3.5 days of structural price context.
- * Exported so the chart component knows which candles to fetch for detection.
- */
-export const FLOOR_DETECTION_INTERVAL = "5m" as const;
-
-/** Minimum candle history required before running detection. */
-const MIN_DETECTION_CANDLES = 60;
-
-// ─── Types ──────────────────────────────────────────────────────────────────
+function minRetraceFracFromTyp(typ: number): number {
+  return clamp(typ * 2.75, 0.045, 0.22);
+}
 
 export type BounceZone = {
-  /** Mean price of the clustered pivot lows. */
   price: number;
-  /** Number of distinct pivot touches at this level. */
-  touches: number;
-  /** 0–1 composite score (touches × recency). */
+  confluenceScore: number;
+  /** `swing` or `swing+50K` etc. when near a round MC magnet. */
+  sources: string;
   strength: number;
-  /** Candles since most recent touch (0 = latest candle). */
   lastTouchAgo: number;
-  /** True if level is below the last close (acting as support). */
   isSupport: boolean;
+  touches: number;
+  windowHours?: undefined;
 };
 
-type Candle = {
+type TimedCandle = {
+  time: number;
   high: number;
   low: number;
   close: number;
 };
 
-type Cluster = { prices: number[]; indices: number[] };
+type Pivot = { kind: "H" | "L"; idx: number; price: number };
 
-// ─── Internal helpers ───────────────────────────────────────────────────────
-
-function recencyWeight(agoCandles: number): number {
-  return Math.pow(0.5, agoCandles / RECENCY_HALF_LIFE);
+function medianTypicalRangeFrac(candles: TimedCandle[]): number {
+  const fracs: number[] = [];
+  for (const c of candles) {
+    const mid = (c.high + c.low) / 2;
+    if (!(mid > 0)) continue;
+    fracs.push((c.high - c.low) / mid);
+  }
+  if (fracs.length === 0) return 0.025;
+  fracs.sort((a, b) => a - b);
+  return fracs[Math.floor(fracs.length * 0.5)]!;
 }
 
-/**
- * Confirms the pivot low was followed by a real rally, not micro-chop.
- * Requires the highest high in the next RECOVERY_LOOKAHEAD candles to be
- * at least MIN_RECOVERY_FRAC above the pivot low.
- */
-function pivotHasRecovery(candles: Candle[], idx: number): boolean {
-  const low = candles[idx]!.low;
-  if (!Number.isFinite(low) || low <= 0) return false;
-  const end = Math.min(idx + RECOVERY_LOOKAHEAD, candles.length - 1);
-  if (end <= idx) return false;
-  let maxHigh = -Infinity;
-  for (let j = idx + 1; j <= end; j++) {
-    const h = candles[j]!.high;
-    if (h > maxHigh) maxHigh = h;
-  }
-  return maxHigh >= low * (1 + MIN_RECOVERY_FRAC);
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, n));
 }
 
-// ─── FloorTool ──────────────────────────────────────────────────────────────
-
-type FloorCheckResult =
-  | { pass: true }
-  | { pass: false; reason: string };
-
-/**
- * FloorTool — sequential validation checkpoint.
- *
- * Checks (in order):
- *  1. Price agreement inside the cluster is tight.
- *  2. Individual touches are spaced apart (not one long consolidation event).
- *  3. The touch history spans enough time (genuinely repeated tests).
- *  4. The floor has not been broken — price hasn't closed decisively below
- *     the level for several consecutive bars after the first touch.
- */
-function runFloorTool(candles: Candle[], cl: Cluster, levelPrice: number): FloorCheckResult {
-  // 1. Cluster price tightness
-  const sortedPrices = [...cl.prices].sort((a, b) => a - b);
-  const mid = sortedPrices.length >> 1;
-  const median = sortedPrices.length % 2
-    ? sortedPrices[mid]!
-    : (sortedPrices[mid - 1]! + sortedPrices[mid]!) / 2;
-  if (!Number.isFinite(median) || median <= 0) return { pass: false, reason: "degenerate median" };
-  const spread = (Math.max(...cl.prices) - Math.min(...cl.prices)) / median;
-  if (spread > MAX_CLUSTER_SPREAD_FRAC) {
-    return { pass: false, reason: `cluster spread too wide (${(spread * 100).toFixed(1)}%)` };
+/** Median bar spacing in seconds (robust to gaps). */
+function inferMedianBucketSec(candles: TimedCandle[]): number {
+  if (candles.length < 3) return 300;
+  const ds: number[] = [];
+  const cap = Math.min(80, candles.length);
+  for (let i = 1; i < cap; i++) {
+    const d = candles[i]!.time - candles[i - 1]!.time;
+    if (d > 0 && d < 86400) ds.push(d);
   }
+  if (ds.length === 0) return 300;
+  ds.sort((a, b) => a - b);
+  return clamp(ds[Math.floor(ds.length / 2)]!, 1, 3600);
+}
 
-  // 2. Adjacent touch spacing
-  const sortedIdx = [...cl.indices].sort((a, b) => a - b);
-  for (let i = 1; i < sortedIdx.length; i++) {
-    if (sortedIdx[i]! - sortedIdx[i - 1]! < MIN_TOUCH_GAP_CANDLES) {
-      return { pass: false, reason: "touches too close together in time" };
+/** Synthetic peak for first swing: max high in ~12h window before the low (not since genesis). */
+function cappedSynthPeakHigh(lowIdx: number, candles: TimedCandle[]): number {
+  const bucket = inferMedianBucketSec(candles);
+  const bars12h = Math.ceil((12 * 3600) / bucket);
+  const lookback = clamp(bars12h, 48, 400);
+  const start = Math.max(0, lowIdx - lookback);
+  let maxH = 0;
+  for (let i = start; i <= lowIdx; i++) maxH = Math.max(maxH, candles[i]!.high);
+  return maxH;
+}
+
+function formatPsychShort(level: number): string {
+  if (level >= 1_000_000) {
+    const m = level / 1_000_000;
+    return `${Number.isInteger(m) ? m : m.toFixed(1)}M`.replace(/\.0M$/, "M");
+  }
+  if (level >= 1000) return `${Math.round(level / 1000)}K`;
+  return String(level);
+}
+
+/** Nearest psych MC rung near `price` and below `spot`, within PSY_ALIGN_FRAC. */
+function alignedPsychTag(price: number, spot: number): string | null {
+  let best: number | null = null;
+  let bestDist = Infinity;
+  for (const L of PSYCHO_MC_LEVELS) {
+    if (L >= spot || L < MIN_FLOOR_MC_USD) continue;
+    const dist = Math.abs(L - price) / Math.max(price, 1);
+    if (dist <= PSY_ALIGN_FRAC && dist < bestDist) {
+      best = L;
+      bestDist = dist;
     }
   }
+  return best != null ? formatPsychShort(best) : null;
+}
 
-  // 3. Temporal span
-  const span = sortedIdx[sortedIdx.length - 1]! - sortedIdx[0]!;
-  if (span < MIN_TOUCH_SPAN_CANDLES) {
-    return { pass: false, reason: `touch span too short (${span} candles, need ${MIN_TOUCH_SPAN_CANDLES})` };
+function countTouchesNearPrice(candles: TimedCandle[], price: number): number {
+  let n = 0;
+  for (const c of candles) {
+    if (price > 0 && Math.abs(c.low - price) / price <= TOUCH_RADIUS_FRAC) n++;
   }
+  return n;
+}
 
-  // 4. Broken-floor check
-  // Scan every candle AFTER the first known touch. If BROKEN_FLOOR_STREAK
-  // consecutive closes land more than BROKEN_FLOOR_CLOSE_FRAC below the level
-  // price, the floor has been violated.
-  const firstTouchIdx = sortedIdx[0]!;
-  const breakLine = levelPrice * (1 - BROKEN_FLOOR_CLOSE_FRAC);
-  let belowStreak = 0;
-  for (let i = firstTouchIdx + 1; i < candles.length; i++) {
-    if (candles[i]!.close < breakLine) {
-      belowStreak++;
-      if (belowStreak >= BROKEN_FLOOR_STREAK) {
-        return { pass: false, reason: "floor broken — price closed decisively below level" };
+function zigzagPivots(candles: TimedCandle[], reversalFrac: number): Pivot[] {
+  const n = candles.length;
+  const pivots: Pivot[] = [];
+
+  let dir: "seek_low" | "seek_high" = "seek_low";
+  let extremeIdx = 0;
+  let extremePrice = candles[0]!.low;
+
+  for (let i = 1; i < n; i++) {
+    const c = candles[i]!;
+
+    if (dir === "seek_low") {
+      if (c.low < extremePrice) {
+        extremePrice = c.low;
+        extremeIdx = i;
+      }
+      if (extremePrice > 0 && c.high >= extremePrice * (1 + reversalFrac)) {
+        pivots.push({ kind: "L", idx: extremeIdx, price: extremePrice });
+        dir = "seek_high";
+        extremePrice = c.high;
+        extremeIdx = i;
       }
     } else {
-      belowStreak = 0;
-    }
-  }
-
-  return { pass: true };
-}
-
-// ─── Public API ─────────────────────────────────────────────────────────────
-
-/**
- * @param candles      Full OHLC history (should be FLOOR_DETECTION_INTERVAL candles).
- * @param currentPrice Live current price — used as a last-mile broken-floor guard.
- *                     Pass `undefined` if unavailable; FloorTool historical check still runs.
- */
-export function detectBounceZones(candles: Candle[], currentPrice?: number): BounceZone[] {
-  if (candles.length < MIN_DETECTION_CANDLES) return [];
-
-  const lastClose = candles[candles.length - 1]?.close ?? 0;
-  const total = candles.length;
-
-  // ── Pass 1: pivot lows ──────────────────────────────────────────────────
-  type PivotLow = { price: number; idx: number };
-  const pivots: PivotLow[] = [];
-
-  for (let i = PIVOT_WING; i < total - PIVOT_WING; i++) {
-    const low = candles[i]!.low;
-    let isPivot = true;
-    for (let j = i - PIVOT_WING; j <= i + PIVOT_WING; j++) {
-      if (j !== i && candles[j]!.low <= low) { isPivot = false; break; }
-    }
-    if (!isPivot) continue;
-    if (!pivotHasRecovery(candles, i)) continue;
-    pivots.push({ price: low, idx: i });
-  }
-
-  if (pivots.length === 0) return [];
-
-  // ── Pass 2: cluster into price levels ───────────────────────────────────
-  const clusters: Cluster[] = [];
-
-  for (const piv of pivots) {
-    let matched = false;
-    for (const cl of clusters) {
-      const rep = cl.prices.reduce((a, b) => a + b, 0) / cl.prices.length;
-      if (Math.abs(piv.price - rep) / rep < CLUSTER_PCT) {
-        cl.prices.push(piv.price);
-        cl.indices.push(piv.idx);
-        matched = true;
-        break;
+      if (c.high > extremePrice) {
+        extremePrice = c.high;
+        extremeIdx = i;
+      }
+      if (extremePrice > 0 && c.low <= extremePrice * (1 - reversalFrac)) {
+        pivots.push({ kind: "H", idx: extremeIdx, price: extremePrice });
+        dir = "seek_low";
+        extremePrice = c.low;
+        extremeIdx = i;
       }
     }
-    if (!matched) clusters.push({ prices: [piv.price], indices: [piv.idx] });
   }
 
-  // ── Pass 3: FloorTool validation + scoring ───────────────────────────────
-  const zones: BounceZone[] = [];
+  return pivots;
+}
 
-  for (const cl of clusters) {
-    const touches = cl.prices.length;
-    if (touches < MIN_TOUCHES) continue;
+/** Peak before swing low: preceding ZigZag high, else capped synthetic peak. */
+function priorPeakBeforeSwingLow(
+  pivots: Pivot[],
+  k: number,
+  candles: TimedCandle[],
+): number | null {
+  const low = pivots[k]!;
+  if (low.kind !== "L") return null;
+  if (k >= 1 && pivots[k - 1]!.kind === "H") return pivots[k - 1]!.price;
+  const h = cappedSynthPeakHigh(low.idx, candles);
+  return h > 0 ? h : null;
+}
 
-    const price = cl.prices.reduce((a, b) => a + b, 0) / cl.prices.length;
-
-    const check = runFloorTool(candles, cl, price);
-    if (!check.pass) continue;
-
-    const lastIdx = Math.max(...cl.indices);
-    const lastTouchAgo = total - 1 - lastIdx;
-    const minAgo = Math.min(...cl.indices.map((idx) => total - 1 - idx));
-    const strength = Math.min(1, (touches / 5) * recencyWeight(minAgo));
-
-    zones.push({ price, touches, strength, lastTouchAgo, isSupport: price < lastClose });
+function swingLowsWithMinPullback(
+  pivots: Pivot[],
+  candles: TimedCandle[],
+  minRetraceFrac: number,
+): Pivot[] {
+  const out: Pivot[] = [];
+  for (let k = 0; k < pivots.length; k++) {
+    const p = pivots[k]!;
+    if (p.kind !== "L") continue;
+    const peak = priorPeakBeforeSwingLow(pivots, k, candles);
+    if (peak == null || peak <= p.price) continue;
+    const retrace = (peak - p.price) / peak;
+    if (retrace >= minRetraceFrac) out.push(p);
   }
+  return out;
+}
 
-  // ── Pass 4: deduplicate by minimum separation ───────────────────────────
-  const sorted = zones.sort((a, b) => b.strength - a.strength);
-  const picked: BounceZone[] = [];
+function mergeSourceTokens(a: string | undefined, b: string | undefined): string {
+  const parts = [...new Set([...(a?.split("+") ?? []), ...(b?.split("+") ?? [])].filter(Boolean))];
+  parts.sort((x, y) => {
+    if (x === "swing") return -1;
+    if (y === "swing") return 1;
+    return x.localeCompare(y);
+  });
+  return parts.join("+");
+}
 
+/** Last adjustment: max allowed dip below detector price (reject absurd outliers). */
+const LAST_ADJUST_MAX_EXTRA_DEPTH_FRAC = 0.28;
+
+/**
+ * **Last adjustment** — after ZigZag + filters, snap each shelf to the **true minimum wick**
+ * in a ±time window around the swing pivot. Detector price can sit above the deepest printed low;
+ * this aligns the line with the chart.
+ */
+function lastAdjustmentSnapToWickLows(
+  candles: TimedCandle[],
+  spot: number,
+  picked: ReadonlyArray<{ pivotIdx: number; zone: BounceZone }>,
+): BounceZone[] {
+  const n = candles.length;
+  const bucket = inferMedianBucketSec(candles);
+  const halfWindow = clamp(Math.ceil((24 * 3600) / bucket), 48, 720);
+  const EPS_CEIL = 1.004;
+
+  return picked.map(({ pivotIdx, zone }) => {
+    const lo = Math.max(0, pivotIdx - halfWindow);
+    const hi = Math.min(n - 1, pivotIdx + halfWindow);
+    const detector = zone.price;
+
+    let deepest = Number.POSITIVE_INFINITY;
+    for (let i = lo; i <= hi; i++) {
+      const low = candles[i]!.low;
+      if (low > 0 && low <= detector * EPS_CEIL) deepest = Math.min(deepest, low);
+    }
+    if (!Number.isFinite(deepest)) deepest = detector;
+
+    const minAllowed = detector * (1 - LAST_ADJUST_MAX_EXTRA_DEPTH_FRAC);
+    /** Deepest wick at or under the shelf, but never chase more than ~28% below detector (bad ticks). */
+    const price = clamp(deepest, minAllowed, detector);
+
+    const touches = countTouchesNearPrice(candles, price);
+    const psych = alignedPsychTag(price, spot);
+    const sources = psych ? `swing+${psych}` : "swing";
+    const touchBoost = Math.min(touches, 12) / 12;
+
+    return {
+      ...zone,
+      price,
+      sources,
+      touches,
+      strength: clamp(zone.strength * 0.92 + 0.08 * touchBoost, 0.35, 1),
+      confluenceScore: zone.confluenceScore * 0.85 + touchBoost * 0.15,
+    };
+  });
+}
+
+export function dedupeDetectedZones(zones: BounceZone[]): BounceZone[] {
+  const sorted = [...zones].sort((a, b) => b.price - a.price);
+  const out: BounceZone[] = [];
   for (const z of sorted) {
-    const farEnough = picked.every((p) => {
-      const denom = Math.min(z.price, p.price);
-      return denom <= 0 || Math.abs(z.price - p.price) / denom >= MIN_ZONE_SEPARATION_FRAC;
+    const dup = out.find(
+      (o) => o.price > 0 && Math.abs(z.price - o.price) / Math.min(z.price, o.price) <= CLUSTER_FRAC,
+    );
+    if (!dup) {
+      out.push({ ...z });
+      continue;
+    }
+    dup.price = (dup.price + z.price) / 2;
+    dup.confluenceScore += z.confluenceScore;
+    dup.touches += z.touches;
+    dup.strength = Math.max(dup.strength, z.strength);
+    dup.sources = mergeSourceTokens(dup.sources, z.sources);
+  }
+  return out.slice(0, MAX_ZONES);
+}
+
+function bootstrapSparseHistoryZones(candles: TimedCandle[], lastClose: number): BounceZone[] {
+  const lowerBound = lastClose * (1 - MAX_FLOOR_DISTANCE_FRAC);
+  const upperBound = lastClose / (1 + FLOOR_MARGIN_FRAC);
+  const n = candles.length;
+
+  type Pt = { idx: number; low: number };
+  const pts: Pt[] = [];
+  for (let i = 0; i < n; i++) {
+    const low = candles[i]!.low;
+    if (low >= MIN_FLOOR_MC_USD && low >= lowerBound && low < upperBound) pts.push({ idx: i, low });
+  }
+  if (pts.length === 0) return [];
+
+  pts.sort((a, b) => a.low - b.low);
+
+  const picked: Array<{ pivotIdx: number; zone: BounceZone }> = [];
+  for (const { idx, low } of pts) {
+    const far = picked.every(({ zone: z }) => {
+      const denom = Math.min(z.price, low);
+      return denom <= 0 || Math.abs(z.price - low) / denom >= MIN_ZONE_SEPARATION_FRAC;
     });
-    if (!farEnough) continue;
-    picked.push(z);
+    if (!far) continue;
+
+    const ago = n - 1 - idx;
+    const recency = 1 - ago / Math.max(n, 1);
+    const touches = countTouchesNearPrice(candles, low);
+    const psych = alignedPsychTag(low, lastClose);
+    const sources = psych ? `swing+${psych}` : "swing";
+    const touchBoost = Math.min(touches, 12) / 12;
+    const strength = clamp(0.32 + 0.48 * recency + 0.2 * touchBoost, 0.35, 1);
+
+    picked.push({
+      pivotIdx: idx,
+      zone: {
+        price: low,
+        confluenceScore: recency * 0.65 + touchBoost * 0.35,
+        sources,
+        strength,
+        lastTouchAgo: ago,
+        isSupport: true,
+        touches,
+      },
+    });
+
     if (picked.length >= MAX_ZONES) break;
   }
 
-  // ── Final live-price guard ───────────────────────────────────────────────
-  // If a real-time price is available, drop any floor that current price has
-  // already broken through — the FloorTool only sees closed REST candles which
-  // can lag by up to 30s.
-  if (currentPrice != null && currentPrice > 0) {
-    const breakLine = 1 - BROKEN_FLOOR_CLOSE_FRAC;
-    return picked.filter((z) => currentPrice >= z.price * breakLine);
+  const snapped = lastAdjustmentSnapToWickLows(candles, lastClose, picked);
+  return dedupeDetectedZones(snapped);
+}
+
+export function detectBounceZones(
+  candles: TimedCandle[],
+  currentPrice?: number,
+): BounceZone[] {
+  if (candles.length < MIN_BOOTSTRAP_CANDLES) return [];
+
+  const lastClose = currentPrice ?? candles[candles.length - 1]!.close;
+  if (!lastClose || lastClose <= 0) return [];
+
+  if (candles.length < MIN_DETECTION_CANDLES) {
+    return bootstrapSparseHistoryZones(candles, lastClose);
   }
 
-  return picked;
+  const lowerBound = lastClose * (1 - MAX_FLOOR_DISTANCE_FRAC);
+  const upperBound = lastClose / (1 + FLOOR_MARGIN_FRAC);
+
+  const bucketSec = inferMedianBucketSec(candles);
+  const typ = medianTypicalRangeFrac(candles);
+  // Sub‑minute bars: demand slightly larger reversal vs noise
+  let reversalFrac = clamp(typ * 3.2, 0.028, 0.14);
+  if (bucketSec <= 10) reversalFrac = Math.max(reversalFrac, 0.038);
+  const minRetrace = minRetraceFracFromTyp(typ);
+
+  const pivots = zigzagPivots(candles, reversalFrac);
+  const swingLows = swingLowsWithMinPullback(pivots, candles, minRetrace);
+
+  const total = candles.length;
+  type Cand = { pivot: Pivot; ago: number; recency: number; touches: number };
+  const candidates: Cand[] = [];
+
+  for (const p of swingLows) {
+    if (p.price < MIN_FLOOR_MC_USD || p.price < lowerBound || p.price >= upperBound) continue;
+    const ago = total - 1 - p.idx;
+    const recency = 1 - ago / Math.max(total, 1);
+    const touches = countTouchesNearPrice(candles, p.price);
+    candidates.push({ pivot: p, ago, recency, touches });
+  }
+
+  candidates.sort(
+    (a, b) =>
+      b.recency - a.recency ||
+      b.touches - a.touches ||
+      b.pivot.price - a.pivot.price,
+  );
+
+  const picked: Array<{ pivotIdx: number; zone: BounceZone }> = [];
+  for (const { pivot: p, ago, recency, touches } of candidates) {
+    const far = picked.every(({ zone: z }) => {
+      const denom = Math.min(z.price, p.price);
+      return denom <= 0 || Math.abs(z.price - p.price) / denom >= MIN_ZONE_SEPARATION_FRAC;
+    });
+    if (!far) continue;
+
+    const psych = alignedPsychTag(p.price, lastClose);
+    const sources = psych ? `swing+${psych}` : "swing";
+    const touchBoost = Math.min(touches, 12) / 12;
+    const strength = clamp(0.28 + 0.52 * recency + 0.2 * touchBoost, 0.35, 1);
+
+    picked.push({
+      pivotIdx: p.idx,
+      zone: {
+        price: p.price,
+        confluenceScore: recency * 0.7 + touchBoost * 0.3,
+        sources,
+        strength,
+        lastTouchAgo: ago,
+        isSupport: true,
+        touches,
+      },
+    });
+
+    if (picked.length >= MAX_ZONES) break;
+  }
+
+  const snapped = lastAdjustmentSnapToWickLows(candles, lastClose, picked);
+  const out = dedupeDetectedZones(snapped);
+  if (out.length > 0) return out;
+  return bootstrapSparseHistoryZones(candles, lastClose);
 }

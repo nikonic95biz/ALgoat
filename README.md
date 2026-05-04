@@ -19,14 +19,20 @@ Write, test, and deploy trading algorithms directly in the browser. The AI assis
 |---------|---------|
 | **In-browser IDE** | Monaco editor with the full codebase bundled — write, edit, and deploy algo logic without leaving the tab |
 | **AI assistant** | Embedded chat (Anthropic, OpenAI, Groq, OpenRouter, Mistral, Ollama, …) with live dashboard state + full codebase context. Proposes diffs, applies them, commits to your fork |
+| **Live knob control via chat** | LLM emits ` ```config ``` ` blocks — click "Apply to knobs" and scalper parameters update instantly, no redeploy |
+| **Local workspace (instant HMR)** | Connect a local folder via File System Access API; chat edits write directly to disk and Vite HMR reloads in < 100 ms |
 | **GitHub** | Fork in two clicks. Live file tree, diff preview, commit and push — built into the IDE |
+| **Bounce zone engine** | Algo-detected swing-low support levels drawn on the chart automatically. Optional LLM vision analysis (BETA) sends an offscreen chart screenshot to your AI key for visual confirmation |
 | **Nursery** | Four-tab token watcher tracking hundreds of coins around the clock — New Launches, Not So New, A Little Old, Older (zombie revival scoring) |
-| **Chart** | Live OHLC for any pump.fun mint, auto-streaming via PumpPortal WebSocket |
+| **Chart** | Live OHLC for any pump.fun mint. 1 s / 5 s / 1 m / 5 m / 15 m. Viewport lazy-loading — panning left fetches older history on demand, giving an infinite-scroll feel back to token creation |
 | **Order-book tape** | Real-time buy/sell print stream with size and market cap |
-| **Real trading** | PumpPortal Lightning API — executes directly from the wallet linked to your API key |
+| **Real trading** | PumpPortal Lightning API — pre-bond (bonding curve) and post-bond (Pump AMM / Raydium) with automatic pool fallback |
 | **Paper trading** | Run any algo on the live feed without spending SOL — validate before deploying capital |
+| **Performance tab** | Unified trade history — real + paper, ROI %, entry/exit MC, exit reason, Solscan / Pump.fun links |
 
 All state (keys, settings, chat history) lives in **your browser's `localStorage`**. Nothing is sent to any server this project operates.
+
+> **Latest release:** [v1.1 — 2026-05-04](./CHANGELOG.md) — bounce zone engine, 5 s charts, lazy candle loading, live knob chat control, local workspace HMR, and more.
 
 ---
 
@@ -134,13 +140,14 @@ src/
 │   ├── LandingPage.tsx         # Marketing page (/)
 │   ├── TradingWorkspace.tsx    # IDE shell (/app)
 │   ├── AppTopChrome.tsx        # Horizontal nav + setup progress chip
-│   ├── DashboardSidebar.tsx    # Scalper controls + live entry size
-│   ├── DashboardViewport.tsx   # Chart tab + Nursery tab
-│   ├── CaChartPanel.tsx        # OHLC chart + paper scalper trigger
+│   ├── DashboardSidebar.tsx    # Scalper controls, bounce zones, live knobs
+│   ├── DashboardViewport.tsx   # Persistent chart mount + tab switcher
+│   ├── CaChartPanel.tsx        # OHLC chart, scalper trigger, bounce line draw
+│   ├── PerformancePanel.tsx    # Unified real + paper trade history
 │   ├── NurseryPanel.tsx        # Four-tab token watcher UI
 │   ├── PumpOrderBook.tsx       # Live buy/sell tape
-│   ├── ChatPanel.tsx           # AI assistant UI (SSE, diff/Apply)
-│   ├── SetupPanel.tsx          # Keys, wallet, LLM config
+│   ├── ChatPanel.tsx           # AI assistant (SSE, diff/Apply, config blocks)
+│   ├── SetupPanel.tsx          # Keys, wallet, LLM, local workspace
 │   ├── WorkspacePanel.tsx      # Monaco IDE + GitHub file ops
 │   └── Tooltip.tsx             # Portal-rendered hover tooltips
 ├── context/
@@ -148,10 +155,18 @@ src/
 ├── lib/
 │   ├── nurseryEngine.ts        # Token watcher — PumpPortal WS + pump.fun REST + DexScreener
 │   ├── pumpPortalRealtime.ts   # Shared WebSocket to PumpPortal
-│   ├── scalperPaperEngine.ts   # Paper trading rules engine
-│   ├── pumpPortalLightningTrade.ts  # Real trade execution
+│   ├── scalperPaperEngine.ts   # Paper trading state machine (nearing/armed/in_trade)
+│   ├── scalperPaperConfig.ts   # Default scalper knob values
+│   ├── pumpPortalLightningTrade.ts  # Real trade execution + pool fallback (bonding/AMM/Raydium)
+│   ├── chartBounceZones.ts     # Algo bounce zone detection (ZigZag + psychological levels)
+│   ├── visionBounceDetect.ts   # LLM vision bounce detection (offscreen chart → base64 → API)
+│   ├── pumpCandles.ts          # Candle fetch, 5 s resampling, cache, lazy-load merge
+│   ├── solanaTxSolDelta.ts     # On-chain SOL delta for exact PnL (exponential backoff RPC)
+│   ├── localWorkspace.ts       # File System Access API — local folder write + IndexedDB persist
+│   ├── parseChatEdits.ts       # Parse fenced code blocks + config patches from LLM responses
+│   ├── buildChatContext.ts     # Live dashboard state → LLM context markdown
+│   ├── composerSystemPrompt.ts # System prompt (config blocks, file edits, local workspace)
 │   ├── streamAnthropic.ts      # Anthropic SSE streaming
-│   ├── buildChatContext.ts     # Live dashboard state → LLM context
 │   ├── githubApi.ts            # GitHub REST helpers
 │   ├── llmBackends.ts          # Provider configs + key inference
 │   └── siteUrls.ts             # Base path + route helpers

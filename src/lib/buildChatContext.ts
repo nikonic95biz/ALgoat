@@ -1,4 +1,4 @@
-import type { ChartAnalyticsState, TradingMode } from "@/context/AppContext";
+import type { ChartAnalyticsState, TradingMode, UserBounceZone, ScalperUserConfig } from "@/context/AppContext";
 import type { ScalperPaperSnapshot } from "@/lib/scalperPaperEngine";
 import type { UserAlgoPreset } from "@/types";
 import { formatUsdCompact } from "@/lib/formatUsd";
@@ -14,6 +14,8 @@ export type LiveContextSnapshot = {
   openFilePath: string | null;
   openFileContent: string | null;
   workspaceFilePaths: string[];
+  bounceZones?: UserBounceZone[];
+  scalperUserConfig?: ScalperUserConfig;
 };
 
 function scalperStatus(s: ScalperPaperSnapshot | null): string {
@@ -35,6 +37,32 @@ export function buildLiveContext(snap: LiveContextSnapshot): string {
   lines.push(`- Selected algo: ${algoName(snap.userAlgos, snap.selectedAlgoId)}`);
   lines.push(`- Trading mode: ${snap.tradingMode}`);
   lines.push(`- Paper scalper: ${scalperStatus(ca.paperScalper)}`);
+
+  if (snap.bounceZones && ca.mint) {
+    const mintZones = snap.bounceZones.filter((z) => z.mint === ca.mint);
+    if (mintZones.length > 0) {
+      const active = mintZones.filter((z) => z.enabled);
+      lines.push(
+        `- Chart bounce lines for this coin: ${mintZones.length} saved, ${active.length} turned on` +
+        (active.length > 0
+          ? " — " + active.map((z) => `$${z.price.toFixed(2)}${z.touches > 0 ? ` (touched ${z.touches}x)` : " (you drew this)"}`).join(", ")
+          : "")
+      );
+    } else {
+      lines.push(`- Chart bounce lines: none saved for this coin yet`);
+    }
+  }
+  if (snap.scalperUserConfig) {
+    const c = snap.scalperUserConfig;
+    lines.push(
+      `- Scalper knobs: dip ${c.dipMinPct}% · smallest buy that counts ${c.catalystMinSol} SOL · sell for profit at +${c.takeProfitPct}% · emergency sell if others sell ${c.minOrderBookSellSolForStop} SOL or more`,
+    );
+    if (snap.tradingMode === "real") {
+      lines.push(
+        `- Real-money trade settings: slippage ${c.realSlippagePct}% · priority fee ${c.realPriorityFeeSol} SOL`,
+      );
+    }
+  }
   if (snap.tradingMode === "real") {
     if (ca.livePumpPortalLastSig) {
       lines.push(`- Last Lightning tx (PumpPortal): ${ca.livePumpPortalLastSig}`);

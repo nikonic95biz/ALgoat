@@ -38,7 +38,20 @@ function WorkspaceSlot({
   tabId: string;
   onOpenToken: (mint: string) => void;
 }) {
-  if (tabId === CHART_TAB_ID) return <CaChartPanel />;
-  if (tabId === NURSERY_TAB_ID) return <NurseryPanel onOpenToken={onOpenToken} />;
-  return <CaChartPanel />;
+  const isChart = tabId === CHART_TAB_ID || tabId !== NURSERY_TAB_ID;
+  const isNursery = tabId === NURSERY_TAB_ID;
+
+  return (
+    <>
+      {/* Always mounted so chart/session/zone state survives tab switches */}
+      <div className={isChart ? "h-full min-h-0" : "hidden"}>
+        <CaChartPanel />
+      </div>
+      {isNursery && (
+        <div className="h-full min-h-0">
+          <NurseryPanel onOpenToken={onOpenToken} />
+        </div>
+      )}
+    </>
+  );
 }

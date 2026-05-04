@@ -16,6 +16,7 @@ import {
   Copy,
   ExternalLink,
   FilePen,
+  ImagePlus,
   Loader2,
   Plus,
   Rocket,
@@ -27,7 +28,7 @@ import remarkGfm from "remark-gfm";
 import { useApp } from "@/context/AppContext";
 import { buildComposerSystemPrompt } from "@/lib/composerSystemPrompt";
 import { buildLiveContext } from "@/lib/buildChatContext";
-import { parseChatEdits, parseAlgoBlocks, parseSuggestedFollowups, parseMintDirectives } from "@/lib/parseChatEdits";
+import { parseChatEdits, parseAlgoBlocks, parseSuggestedFollowups, parseMintDirectives, parseConfigPatch } from "@/lib/parseChatEdits";
 import { DiffModal } from "@/components/DiffModal";
 import { CHAT_SIMULATE, streamGibberishReply } from "@/lib/chatSimulate";
 import {
@@ -222,23 +223,43 @@ function MintLoadButtons({
 function ApplyButtons({
   content,
   pending,
+  localWorkspaceConnected,
   onDiff,
   onApplyAll,
   onAddAlgo,
+  onApplyConfig,
 }: {
   content: string;
   pending: boolean;
+  localWorkspaceConnected: boolean;
   onDiff: (path: string, code: string) => void;
   onApplyAll: (edits: { path: string; code: string }[]) => void;
   onAddAlgo: (name: string, description: string) => void;
+  onApplyConfig: (patch: ReturnType<typeof parseConfigPatch>) => void;
 }) {
   const edits = useMemo(() => parseChatEdits(content), [content]);
   const algos = useMemo(() => parseAlgoBlocks(content), [content]);
+  const configPatch = useMemo(() => parseConfigPatch(content), [content]);
 
-  if ((edits.length === 0 && algos.length === 0) || pending) return null;
+  if ((edits.length === 0 && algos.length === 0 && !configPatch) || pending) return null;
+
+  const fileLabel = localWorkspaceConnected ? "Write locally" : "Apply";
+  const fileCreateLabel = localWorkspaceConnected ? "Create locally" : "Create";
 
   return (
     <div className="mt-3 flex flex-wrap gap-1.5">
+      {/* Config patch → live knob update */}
+      {configPatch ? (
+        <button
+          type="button"
+          onClick={() => onApplyConfig(configPatch)}
+          title="Update live knob values instantly — no deploy needed"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-[color-mix(in_srgb,#22d3ee_30%,transparent)] bg-[color-mix(in_srgb,#22d3ee_8%,transparent)] px-2.5 py-1.5 font-mono text-[11px] font-medium text-cyan-300/80 transition-colors hover:border-[color-mix(in_srgb,#22d3ee_50%,transparent)] hover:text-cyan-200"
+        >
+          <Check className="size-3 shrink-0" strokeWidth={2} />
+          Apply to knobs
+        </button>
+      ) : null}
       {edits.length > 1 ? (
         <button
           type="button"
@@ -246,7 +267,7 @@ function ApplyButtons({
           className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-sideBar)] px-2.5 py-1.5 font-mono text-[11px] font-medium text-[var(--color-fg-muted)] transition-colors hover:border-[rgba(255,255,255,0.15)] hover:text-[var(--color-fg)]"
         >
           <FilePen className="size-3 shrink-0" strokeWidth={1.5} />
-          Apply all ({edits.length} files)
+          {fileLabel} all ({edits.length} files)
         </button>
       ) : null}
       {edits.map((edit, i) => (
@@ -258,7 +279,7 @@ function ApplyButtons({
           className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-sideBar)] px-2.5 py-1.5 font-mono text-[11px] text-[var(--color-fg-muted)] transition-colors hover:border-[rgba(255,255,255,0.15)] hover:text-[var(--color-fg)]"
         >
           <FilePen className="size-3 shrink-0" strokeWidth={1.5} />
-          {edit.isNew ? "Create" : "Apply"} {edit.path}
+          {edit.isNew ? fileCreateLabel : fileLabel} {edit.path}
         </button>
       ))}
       {algos.map((algo, i) => (
@@ -345,10 +366,12 @@ function ChatTurnSection({
   copiedId,
   commitResults,
   githubWorkspace,
+  localWorkspaceConnected,
   onCopy,
   onDiff,
   onApplyAll,
   onAddAlgo,
+  onApplyConfig,
   onSend,
   onDismissCommit,
   onLoadMint,
@@ -359,10 +382,12 @@ function ChatTurnSection({
   copiedId: string | null;
   commitResults: Map<string, CommitResult>;
   githubWorkspace: { token: string; owner: string; repo: string; branch: string };
+  localWorkspaceConnected: boolean;
   onCopy: (id: string, content: string) => void;
   onDiff: (path: string, code: string) => void;
   onApplyAll: (edits: { path: string; code: string }[]) => void;
   onAddAlgo: (name: string, description: string) => void;
+  onApplyConfig: (patch: ReturnType<typeof parseConfigPatch>) => void;
   onSend: (text: string) => void;
   onDismissCommit: (msgId: string) => void;
   onLoadMint: (mint: string) => void;
@@ -419,9 +444,11 @@ function ChatTurnSection({
               <ApplyButtons
                 content={asst.content}
                 pending={pending && isLatestTurn}
+                localWorkspaceConnected={localWorkspaceConnected}
                 onDiff={onDiff}
                 onApplyAll={onApplyAll}
                 onAddAlgo={onAddAlgo}
+                onApplyConfig={onApplyConfig}
               />
               <FollowupPills followups={followups} onSend={onSend} />
               {commitResult ? (
@@ -562,9 +589,15 @@ export function ChatPanel() {
     openFilePath,
     openFileContent,
     workspaceFilePaths,
+    bounceZones,
+    scalperUserConfig,
+    setScalperUserConfig,
     applyFileEdit,
     addUserAlgo,
     githubWorkspace,
+    localWorkspaceHandle,
+    pendingLocalEdits,
+    pushPendingToGitHub,
   } = useApp();
 
   // Effective model = session override merged onto global
@@ -588,10 +621,14 @@ export function ChatPanel() {
   const [atQuery, setAtQuery] = useState<string | null>(null);
   const [atMentionedPaths, setAtMentionedPaths] = useState<string[]>([]);
 
+  const [attachedImages, setAttachedImages] = useState<string[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
+
   const abortRef = useRef<AbortController | null>(null);
   const feedScrollRef = useRef<HTMLDivElement>(null);
   const isInitialFeedLayout = useRef(true);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ── Deploy status ──────────────────────────────────────────────────
   // Deploy status polling removed — Vercel auto-deploys on push, no workflow file needed.
@@ -675,6 +712,26 @@ export function ChatPanel() {
     }
   }
 
+  function handleApplyConfig(patch: ReturnType<typeof parseConfigPatch>) {
+    if (!patch) return;
+    setScalperUserConfig(patch);
+  }
+
+  const [pushingToGitHub, setPushingToGitHub] = useState(false);
+  const [pushError, setPushError] = useState<string | null>(null);
+
+  async function handlePushToGitHub() {
+    setPushingToGitHub(true);
+    setPushError(null);
+    try {
+      await pushPendingToGitHub();
+    } catch (e) {
+      setPushError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPushingToGitHub(false);
+    }
+  }
+
   async function handleApplyAll(edits: { path: string; code: string }[], targetMsgId?: string) {
     setApplyingPaths(edits.map((e) => e.path));
     setApplyError(null);
@@ -713,6 +770,30 @@ export function ChatPanel() {
     setTimeout(() => textareaRef.current?.focus(), 0);
   }
 
+  // ── Image attachment ──────────────────────────────────────────────
+  function handleImageFiles(files: FileList | null) {
+    if (!files) return;
+    for (const f of Array.from(files)) {
+      if (!f.type.startsWith("image/")) continue;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const url = e.target?.result as string;
+        if (url) setAttachedImages((prev) => [...prev, url]);
+      };
+      reader.readAsDataURL(f);
+    }
+  }
+
+  function handleComposerDragOver(e: React.DragEvent) {
+    if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setIsDragOver(true); }
+  }
+  function handleComposerDragLeave() { setIsDragOver(false); }
+  function handleComposerDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragOver(false);
+    handleImageFiles(e.dataTransfer.files);
+  }
+
   // ── Send ──────────────────────────────────────────────────────────
   const apiKeyOptional = presetAllowsOptionalApiKey(model) || isLikelyLocalLlm(model.baseUrl);
   const showMissingKeyBanner = !apiKeyOptional && !model.apiKey.trim();
@@ -730,11 +811,13 @@ export function ChatPanel() {
 
   async function send(textOverride?: string) {
     const text = (textOverride ?? input).trim();
-    if (!text || pending) return;
+    if ((!text && attachedImages.length === 0) || pending) return;
 
     const prior = messages;
-    appendMessage({ role: "user", content: text });
+    appendMessage({ role: "user", content: text || "(image)" });
+    const capturedImages = attachedImages;
     setInput("");
+    setAttachedImages([]);
     setAtMentionedPaths([]);
     setAtQuery(null);
     setApplyError(null);
@@ -808,6 +891,8 @@ export function ChatPanel() {
       openFilePath,
       openFileContent,
       workspaceFilePaths,
+      bounceZones,
+      scalperUserConfig,
     });
 
     const systemContent =
@@ -828,7 +913,22 @@ export function ChatPanel() {
           "x-api-key": trimmedKey,
           "anthropic-dangerous-direct-browser-access": "true",
         };
-        const aBody = buildAnthropicMessagesBody({ model: model.model, system: systemContent, history, stream: true });
+        let aBody = buildAnthropicMessagesBody({ model: model.model, system: systemContent, history, stream: true });
+        if (capturedImages.length > 0) {
+          const msgs = aBody.messages as Array<{ role: string; content: unknown }>;
+          const lastIdx = msgs.length - 1;
+          if (lastIdx >= 0) {
+            const last = msgs[lastIdx]!;
+            const imageBlocks = capturedImages.map((url) => {
+              const mimeMatch = url.match(/^data:([^;]+);base64,/);
+              const mediaType = (mimeMatch?.[1] ?? "image/png") as string;
+              return { type: "image", source: { type: "base64", media_type: mediaType, data: url.replace(/^data:[^;]+;base64,/, "") } };
+            });
+            const patched = [...msgs];
+            patched[lastIdx] = { ...last, content: [...imageBlocks, { type: "text", text: last.content }] };
+            aBody = { ...aBody, messages: patched };
+          }
+        }
 
         // 20 s to get the first HTTP response byte (shorter than 90 s, shows error faster)
         const connDeadline = new AbortController();
@@ -922,7 +1022,25 @@ export function ChatPanel() {
         method: "POST",
         headers,
           signal: mergeAbortSignals(abort.signal, oadl.signal),
-          body: JSON.stringify({ model: model.model, stream: true, messages: [{ role: "system", content: systemContent }, ...history] }),
+          body: JSON.stringify({
+            model: model.model,
+            stream: true,
+            messages: [
+              { role: "system", content: systemContent },
+              ...history.map((m, i) => {
+                if (i === history.length - 1 && m.role === "user" && capturedImages.length > 0) {
+                  return {
+                    role: m.role,
+                    content: [
+                      ...capturedImages.map((url) => ({ type: "image_url", image_url: { url, detail: "low" } })),
+                      { type: "text", text: m.content },
+                    ],
+                  };
+                }
+                return m;
+              }),
+            ],
+          }),
       });
       } finally {
         window.clearTimeout(oadlTid);
@@ -1149,10 +1267,12 @@ export function ChatPanel() {
             copiedId={copiedId}
             commitResults={commitResults}
             githubWorkspace={githubWorkspace}
+            localWorkspaceConnected={localWorkspaceHandle !== null}
             onCopy={copyMessage}
             onDiff={(path, code) => void openDiff(path, code)}
             onApplyAll={(edits) => void handleApplyAll(edits, turns[idx]?.assistant?.id)}
             onAddAlgo={addUserAlgo}
+            onApplyConfig={handleApplyConfig}
             onSend={(text) => void send(text)}
             onDismissCommit={(msgId) => setCommitResults((prev) => { const next = new Map(prev); next.delete(msgId); return next; })}
             onLoadMint={navigateChartToMint}
@@ -1162,11 +1282,41 @@ export function ChatPanel() {
 
       {/* ── Composer ────────────────────────────────────────────────── */}
       <div className="shrink-0 px-3 pb-3 pt-2">
+        {/* ── Local workspace status + Push strip ─────────────── */}
+        {localWorkspaceHandle ? (
+          <div className="mb-2 flex items-center gap-2 rounded-lg border border-[color-mix(in_srgb,#22d3ee_20%,transparent)] bg-[color-mix(in_srgb,#22d3ee_5%,transparent)] px-3 py-1.5 text-[11px]">
+            <span className="size-1.5 shrink-0 rounded-full bg-cyan-400/80" />
+            <span className="text-cyan-300/70">Local workspace connected — edits write to disk instantly</span>
+            {pendingLocalEdits.size > 0 ? (
+              <button
+                type="button"
+                disabled={pushingToGitHub}
+                onClick={() => void handlePushToGitHub()}
+                title="Commit all locally-written files to your GitHub repo"
+                className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-[color-mix(in_srgb,#22d3ee_30%,transparent)] px-2 py-0.5 text-[10.5px] font-medium text-cyan-300/80 transition-colors hover:border-[color-mix(in_srgb,#22d3ee_50%,transparent)] hover:text-cyan-200 disabled:opacity-50"
+              >
+                {pushingToGitHub ? (
+                  <Loader2 className="size-3 animate-spin" strokeWidth={2} />
+                ) : (
+                  <Rocket className="size-3" strokeWidth={1.5} />
+                )}
+                Push {pendingLocalEdits.size} file{pendingLocalEdits.size !== 1 ? "s" : ""} to GitHub
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {pushError ? (
+          <div className="mb-2 flex items-center gap-2 rounded-lg border border-red-500/20 px-3 py-1.5 text-[11.5px] text-red-400/80">
+            {pushError}
+            <button type="button" onClick={() => setPushError(null)} className="ml-auto shrink-0 underline opacity-70 hover:opacity-100">dismiss</button>
+          </div>
+        ) : null}
+
         {/* Status banners */}
         {applyingPaths.length > 0 ? (
           <div className="mb-2 flex items-center gap-2 px-1 text-[11.5px] text-[var(--color-fg-dim)]">
             <Loader2 className="size-3.5 shrink-0 animate-spin" strokeWidth={2} />
-            Applying {applyingPaths.join(", ")}…
+            {localWorkspaceHandle ? "Writing" : "Applying"} {applyingPaths.join(", ")}…
           </div>
         ) : applyError ? (
           <div className="mb-2 flex items-center gap-2 rounded-lg border border-red-500/20 px-3 py-1.5 text-[11.5px] text-red-400/80">
@@ -1184,8 +1334,23 @@ export function ChatPanel() {
           </div>
         ) : null}
 
+        {/* Hidden file input for image attachment */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={(e) => { handleImageFiles(e.target.files); e.target.value = ""; }}
+        />
+
         {/* Input box */}
-        <div className="unt-composer-input-wrap relative">
+        <div
+          className={`unt-composer-input-wrap relative transition-colors${isDragOver ? " ring-1 ring-[var(--color-fg-muted)] bg-[rgba(255,255,255,0.03)]" : ""}`}
+          onDragOver={handleComposerDragOver}
+          onDragLeave={handleComposerDragLeave}
+          onDrop={handleComposerDrop}
+        >
           {atQuery !== null ? (
             <AtMentionDropdown
               query={atQuery}
@@ -1193,6 +1358,30 @@ export function ChatPanel() {
               onSelect={selectAtMention}
             />
           ) : null}
+
+          {/* Image thumbnails */}
+          {attachedImages.length > 0 ? (
+            <div className="flex flex-wrap gap-2 px-3.5 pt-2.5">
+              {attachedImages.map((url, i) => (
+                <div key={i} className="relative shrink-0 group">
+                  <img
+                    src={url}
+                    alt="attachment"
+                    className="h-16 w-16 rounded-md object-cover border border-[var(--color-border-subtle)]"
+                  />
+                  <button
+                    type="button"
+                    title="Remove"
+                    onClick={() => setAttachedImages((prev) => prev.filter((_, j) => j !== i))}
+                    className="absolute -top-1.5 -right-1.5 flex size-4 items-center justify-center rounded-full bg-[var(--color-bg-editor)] border border-[var(--color-border-subtle)] text-[var(--color-fg-muted)] opacity-0 group-hover:opacity-100 transition-opacity hover:text-[var(--color-fg)]"
+                  >
+                    <X className="size-2.5" strokeWidth={2.5} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
           <textarea
             ref={textareaRef}
             rows={3}
@@ -1202,14 +1391,43 @@ export function ChatPanel() {
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
               if (e.key === "Escape" && atQuery !== null) { setAtQuery(null); }
             }}
-            placeholder="Message the assistant… (@ to mention a file)"
+            onPaste={(e) => {
+              const items = Array.from(e.clipboardData.items);
+              const imageItems = items.filter((it) => it.type.startsWith("image/"));
+              if (imageItems.length > 0) {
+                e.preventDefault();
+                imageItems.forEach((it) => {
+                  const f = it.getAsFile();
+                  if (f) {
+                    const reader = new FileReader();
+                    reader.onload = (ev) => {
+                      const url = ev.target?.result as string;
+                      if (url) setAttachedImages((prev) => [...prev, url]);
+                    };
+                    reader.readAsDataURL(f);
+                  }
+                });
+              }
+            }}
+            placeholder={isDragOver ? "Drop image here…" : "Message the assistant… (@ to mention a file)"}
             disabled={pending}
             className="unt-composer-textarea w-full resize-none bg-transparent px-3.5 pt-3 pb-1 text-[13px] leading-relaxed text-[var(--color-fg)] outline-none placeholder:text-[var(--color-fg-dim)] disabled:opacity-50"
           />
           <div className="flex items-center justify-between gap-2 px-2.5 pb-2.5 pt-1">
-            <span className="pl-1 text-[10.5px] text-[var(--color-fg-dim)]">
-              ↵ send · ⇧↵ newline · @ file
-            </span>
+            <div className="flex items-center gap-2 pl-0.5">
+              <button
+                type="button"
+                title="Attach image"
+                disabled={pending}
+                onClick={() => fileInputRef.current?.click()}
+                className="flex size-6 items-center justify-center rounded text-[var(--color-fg-dim)] transition-colors hover:text-[var(--color-fg-muted)] disabled:opacity-30"
+              >
+                <ImagePlus className="size-3.5" strokeWidth={1.75} />
+              </button>
+              <span className="text-[10.5px] text-[var(--color-fg-dim)]">
+                ↵ send · ⇧↵ newline · @ file
+              </span>
+            </div>
             {pending ? (
               <button
                 type="button"
@@ -1222,7 +1440,7 @@ export function ChatPanel() {
             ) : (
             <button
               type="button"
-                disabled={!input.trim()}
+                disabled={!input.trim() && attachedImages.length === 0}
               onClick={() => void send()}
                 title="Send"
                 className="flex size-7 shrink-0 items-center justify-center rounded-full bg-[var(--color-fg-dim)] text-[var(--color-bg-editor)] transition-all hover:bg-[var(--color-fg-muted)] disabled:opacity-25"

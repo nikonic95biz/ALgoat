@@ -36,11 +36,19 @@ function botTradesBookEmptyHint(snapshot: ScalperPaperSnapshot | null | undefine
   }
 
   if (snapshot.status === "watching") {
-    return `No closed trades yet. Waiting for the chart to dip, then a buy of at least ${minBuy} SOL before we jump in.`;
+    return `No closed trades yet. Watching for a dip — after that the next ${minBuy}+ SOL buy triggers entry.`;
+  }
+
+  if (snapshot.status === "nearing") {
+    return `No closed trades yet. Price is pulling back toward a bounce zone. Not armed yet — full dip + zone alignment needed before we arm and wait for a catalyst buy.`;
   }
 
   if (snapshot.status === "dip") {
-    return `No closed trades yet. We’re in the dip — waiting for a buy of at least ${minBuy} SOL before we jump in.`;
+    return `No closed trades yet. Price is dipped but bounce zones aren’t aligned yet (or we’re still scanning). When alignment hits we arm; then the next ${minBuy}+ SOL buy fires the entry.`;
+  }
+
+  if (snapshot.status === "arming") {
+    return `No closed trades yet. Armed — dip + zones locked in. The next ${minBuy}+ SOL buy on tape should trigger entry immediately after that print.`;
   }
 
   return `No closed trades yet. You’re in a trade right now. Finished trades show here after we sell for +${tp}% profit, or after someone sells at least ${stopSol} SOL (that counts as our stop).`;
@@ -70,6 +78,7 @@ function AnalyticsPanel() {
     scalperLiveBuySol,
     setScalperLiveBuySol,
     scalperUserConfig,
+    requestManualSell,
   } = useApp();
 
   const pumpCfgRev = usePumpPortalConfigRevision();
@@ -300,6 +309,20 @@ function AnalyticsPanel() {
                 {algoSessionActive ? "Stop" : "Start"}
               </button>
               </Tooltip>
+              {/* Sell All — emergency exit when real money is deployed */}
+              {algoSessionActive &&
+                tradingMode === "real" &&
+                chartAnalytics.paperScalper?.status === "in_trade" ? (
+                <Tooltip text="Immediately sell 100 % of your position on-chain, then stop the session." side="top">
+                  <button
+                    type="button"
+                    className="shrink-0 rounded-md border border-rose-500/60 bg-rose-600/20 px-3 py-2 text-[12px] font-semibold text-rose-200 transition-all hover:border-rose-400/70 hover:bg-rose-600/35 active:scale-95"
+                    onClick={() => requestManualSell()}
+                  >
+                    Sell All
+                  </button>
+                </Tooltip>
+              ) : null}
             </div>
             {tradingNotice ? (
               <p className="unt-help-text whitespace-pre-wrap font-medium text-amber-400/90">{tradingNotice}</p>
@@ -372,11 +395,12 @@ function AnalyticsPanel() {
 }
 
 /** Titled section card for strategy settings. */
-function SettingsCard({ label, tip, accent, locked, headerRight, children }: {
+function SettingsCard({ label, tip, accent, locked, liveSession, headerRight, children }: {
   label: string;
   tip: string;
   accent?: "sky";
   locked?: boolean;
+  liveSession?: boolean;
   headerRight?: ReactNode;
   children: ReactNode;
 }) {
@@ -408,6 +432,9 @@ function SettingsCard({ label, tip, accent, locked, headerRight, children }: {
         <div className="ml-auto flex shrink-0 items-center gap-2">
           {locked ? (
             <span className="text-[9px] text-[var(--color-fg-dim)]">stop session to edit</span>
+          ) : null}
+          {liveSession ? (
+            <span className="text-[9px] font-medium" style={{ color: "#22d3ee" }}>● live</span>
           ) : null}
           {headerRight}
         </div>
@@ -472,15 +499,100 @@ function Knob({ label, value, min, max, step, unit, tip, disabled, onChange }: {
 }
 
 function SuggestLinesButton() {
-  const { refreshSuggestedBounceZones } = useApp();
+  const { refreshSuggestedBounceZones, floorCandlesStatus, chartAnalytics, model } = useApp();
+  const [noKeyWarning, setNoKeyWarning] = useState(false);
+
+  const candlesLoading = floorCandlesStatus === "loading";
+  const visionLoading = chartAnalytics.visionDetectStatus === "loading";
+  const loading = candlesLoading || visionLoading;
+  const disabled = floorCandlesStatus === "idle" || candlesLoading;
+  const noApiKey = !model.apiKey.trim();
+
+  // Auto-hide the "no key" warning after 3 s
+  useEffect(() => {
+    if (!noKeyWarning) return;
+    const t = window.setTimeout(() => setNoKeyWarning(false), 3000);
+    return () => window.clearTimeout(t);
+  }, [noKeyWarning]);
+
+  const tooltipText = noKeyWarning
+    ? "⚠ Connect your LLM API key in Setup first."
+    : candlesLoading
+      ? "Fetching candles… bounce lines will appear automatically."
+      : visionLoading
+        ? "Running vision analysis… AI is reading the chart."
+        : disabled
+          ? "Paste a mint to load bounce lines automatically."
+          : noApiKey
+            ? "Connect your LLM API key in Setup to enable AI vision analysis."
+            : chartAnalytics.visionDetectError
+              ? `Last vision attempt failed: ${chartAnalytics.visionDetectError}`
+              : chartAnalytics.visionDetectStatus === "done"
+                ? "Re-run: algo detection + AI vision analysis of the chart."
+                : "Re-run bounce detection + AI vision analysis of the chart.";
+
+  const label = candlesLoading
+    ? "Loading candles…"
+    : visionLoading
+      ? "AI reading chart…"
+      : "Refresh bounce lines";
+
+  const isReady = !disabled && !loading && !noApiKey && !chartAnalytics.visionDetectError;
+
+  const handleClick = () => {
+    if (disabled || loading) return;
+    if (noApiKey) {
+      setNoKeyWarning(true);
+      return;
+    }
+    refreshSuggestedBounceZones();
+  };
+
   return (
-    <Tooltip text="Re-scan candles for obvious, repeated bounce lows only — marginal levels are yours to add. Manual lines stay." side="left">
+    <Tooltip text={tooltipText} side="left">
       <button
         type="button"
-        onClick={refreshSuggestedBounceZones}
-        className="rounded-md border border-sky-400/35 bg-sky-500/15 px-2 py-1 text-[10px] font-semibold text-sky-100 hover:bg-sky-500/25"
+        onClick={handleClick}
+        disabled={disabled || loading}
+        style={isReady ? {
+          background: "linear-gradient(135deg, #0c4a6e 0%, #0369a1 45%, #0ea5e9 100%)",
+          boxShadow: "0 0 10px rgba(14,165,233,0.45), 0 0 22px rgba(3,105,161,0.3)",
+          border: "1px solid rgba(125,211,252,0.35)",
+          animation: "untBetaPulse 2.4s ease-in-out infinite",
+        } : noApiKey && !disabled ? {
+          background: "rgba(220,38,38,0.08)",
+          border: "1px solid rgba(248,113,113,0.25)",
+        } : undefined}
+        className={
+          "relative flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[10px] font-bold tracking-wide transition-all " +
+          (disabled || loading
+            ? "cursor-not-allowed border-purple-400/15 bg-purple-500/5 text-purple-100/35"
+            : noKeyWarning
+              ? "border-rose-400/60 bg-rose-500/15 text-rose-200"
+              : noApiKey
+                ? "cursor-pointer border-rose-500/25 text-rose-300/70 hover:border-rose-400/40 hover:text-rose-200/90"
+                : chartAnalytics.visionDetectError
+                  ? "border-red-400/35 bg-red-500/10 text-red-200 hover:bg-red-500/20"
+                  : "text-white hover:brightness-110")
+        }
       >
-        Suggest lines
+        {/* BETA badge */}
+        {isReady && (
+          <span
+            style={{ fontSize: "7.5px", letterSpacing: "0.1em", opacity: 0.9 }}
+            className="rounded bg-white/15 px-1 py-px font-black uppercase text-white"
+          >
+            BETA
+          </span>
+        )}
+        {noKeyWarning
+          ? "⚠"
+          : loading
+            ? <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border border-purple-300/60 border-t-purple-200" />
+            : chartAnalytics.visionDetectError
+              ? "⚠"
+              : null}
+        {label}
       </button>
     </Tooltip>
   );
@@ -496,7 +608,7 @@ function BounceZonesEditor({ mint }: { mint: string }) {
     <div className="space-y-2">
       {zones.length === 0 && (
         <p className="text-[10px] leading-snug text-[var(--color-fg-dim)]">
-          Wait for the chart to load — lines show up when we spot prices that bounced a few times. You can type your own number below too.
+          Bounce lines load automatically once 3 000 candles are fetched. Add your own levels below.
         </p>
       )}
 
@@ -590,9 +702,16 @@ function ZoneRow({ zone, onToggle, onPriceChange, onRemove }: {
         </button>
       )}
 
-      {/* Meta */}
+      {/* Meta — show which timeframes contributed, or "manual" */}
       <span className="shrink-0 text-[10px] text-[var(--color-fg-dim)]">
-        {zone.touches > 0 ? `×${zone.touches}` : "manual"}
+        {(() => {
+          const src = (zone as { sources?: string }).sources;
+          if (!src) return zone.touches > 0 ? `×${zone.touches}` : "manual";
+          if (src === "swing") return "Swing low";
+          if (src.startsWith("swing+")) return `Swing · ${src.slice("swing+".length)}`;
+          if (src.startsWith("vision·")) return `👁 ${src.slice("vision·".length)}`;
+          return src;
+        })()}
       </span>
 
       {/* Remove */}
@@ -619,7 +738,6 @@ function ScalperPaperPanel({
   liveChainTrades: BotTradeRow[];
 }) {
   const { scalperUserConfig, setScalperUserConfig } = useApp();
-  const locked = paperSessionActive;
 
   const wrap = (belowRules: ReactNode) => (
     <div className="space-y-2 text-[12px]">
@@ -627,27 +745,30 @@ function ScalperPaperPanel({
       <SettingsCard
         label="Entry"
         tip="Rules for when we open a buy."
-        locked={locked}
+        liveSession={paperSessionActive}
       >
         <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
-          <Knob label="Dip %" value={scalperUserConfig.dipMinPct} min={1} max={50} step={1} unit="%" disabled={locked}
+          <Knob label="Dip %" value={scalperUserConfig.dipMinPct} min={1} max={50} step={1} unit="%"
             tip="How far the chart needs to drop from its recent high before we look for a buy. After each trade, we start measuring again."
             onChange={(v) => setScalperUserConfig({ dipMinPct: v })} />
-          <Knob label="Min buy (SOL)" value={scalperUserConfig.catalystMinSol} min={0.01} max={10} step={0.05} unit="SOL" disabled={locked}
+          <Knob label="Min buy (SOL)" value={scalperUserConfig.catalystMinSol} min={0.01} max={10} step={0.05} unit="SOL"
             tip="We only jump in if someone buys this much SOL or more. Tiny buys are ignored so we don't chase noise."
             onChange={(v) => setScalperUserConfig({ catalystMinSol: v })} />
         </div>
       </SettingsCard>
 
       {/* ── Exit card ── */}
-      <SettingsCard label="Exit" tip="Rules for when we sell and leave the trade.">
+      <SettingsCard label="Exit" tip="Rules for when we sell and leave the trade." liveSession={paperSessionActive}>
         <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
-          <Knob label="Take profit %" value={scalperUserConfig.takeProfitPct} min={1} max={200} step={1} unit="%" disabled={locked}
+          <Knob label="Take profit %" value={scalperUserConfig.takeProfitPct} min={1} max={200} step={1} unit="%"
             tip="We sell for profit when the chart goes up this much above where we bought (same numbers as on your chart)."
             onChange={(v) => setScalperUserConfig({ takeProfitPct: v })} />
-          <Knob label="Stop SOL" value={scalperUserConfig.minOrderBookSellSolForStop} min={0.01} max={10} step={0.05} unit="SOL" disabled={locked}
+          <Knob label="Stop SOL" value={scalperUserConfig.minOrderBookSellSolForStop} min={0.01} max={10} step={0.05} unit="SOL"
             tip="If we see a sell this big or bigger, we treat it as a stop and get out. Smaller sells don't count."
             onChange={(v) => setScalperUserConfig({ minOrderBookSellSolForStop: v })} />
+          <Knob label="Re-entry cooldown (s)" value={Math.round(scalperUserConfig.reentryCooldownMs / 1000)} min={2} max={300} step={1} unit="s"
+            tip="Seconds to wait after a closed trade before looking for a new entry. Default 30 s prevents back-to-back double entries."
+            onChange={(v) => setScalperUserConfig({ reentryCooldownMs: Math.round(v) * 1000 })} />
         </div>
       </SettingsCard>
 
@@ -656,13 +777,13 @@ function ScalperPaperPanel({
         <SettingsCard
           label="Execution"
           tip="Only used when real money is on. Slippage = how much the price can move before your trade still goes through. Priority fee = a little extra SOL so the chain handles your trade faster."
-          locked={locked}
+          liveSession={paperSessionActive}
         >
           <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
-            <Knob label="Slippage %" value={scalperUserConfig.realSlippagePct} min={1} max={50} step={1} unit="%" disabled={locked}
+            <Knob label="Slippage %" value={scalperUserConfig.realSlippagePct} min={1} max={50} step={1} unit="%"
               tip="How much wiggle room the price has. Higher usually means fewer failed trades on jumpy coins."
               onChange={(v) => setScalperUserConfig({ realSlippagePct: v })} />
-            <Knob label="Priority fee" value={scalperUserConfig.realPriorityFeeSol} min={0.00001} max={0.1} step={0.0005} unit="SOL" disabled={locked}
+            <Knob label="Priority fee" value={scalperUserConfig.realPriorityFeeSol} min={0.00001} max={0.1} step={0.0005} unit="SOL"
               tip="Extra SOL paid so your trade gets picked up sooner. Try around 0.001 SOL to start."
               onChange={(v) => setScalperUserConfig({ realPriorityFeeSol: v })} />
           </div>
@@ -677,6 +798,20 @@ function ScalperPaperPanel({
           accent="sky"
           headerRight={<SuggestLinesButton />}
         >
+          <Tooltip
+            text="Refresh bounce lines sends one chart image to your LLM per click — costs more than plain chat. Check your provider usage dashboard."
+            side="bottom"
+          >
+            <div
+              role="note"
+              className="mb-2 flex items-start gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/[0.07] px-2 py-1.5 text-[10px] font-medium leading-snug text-amber-100/95"
+            >
+              <span className="shrink-0 select-none" aria-hidden>
+                ⚠
+              </span>
+              <span>Check API credit spend - still optimizing</span>
+            </div>
+          </Tooltip>
           <BounceZonesEditor mint={mint} />
         </SettingsCard>
       ) : null}
@@ -715,9 +850,13 @@ function ScalperPaperPanel({
   const st =
     snapshot.status === "watching"
       ? "Watching"
-      : snapshot.status === "dip"
-        ? `Dip — need a ${scalperUserConfig.catalystMinSol}+ SOL buy`
-        : "In a trade";
+      : snapshot.status === "nearing"
+        ? "Nearing bounce region — arming trade"
+        : snapshot.status === "dip"
+          ? "Dipped — not armed yet"
+          : snapshot.status === "arming"
+            ? `Armed — next ${scalperUserConfig.catalystMinSol}+ SOL buy fires`
+            : "In a trade";
 
   const chainLegs =
     tradingMode === "real" ? liveChainTrades.filter(isBotTradeChain) : [];
@@ -739,7 +878,19 @@ function ScalperPaperPanel({
     <>
       <div className="flex justify-between gap-2 text-[var(--color-fg-muted)]">
         <span>Status</span>
-        <span className="text-[var(--color-fg)]">{st}</span>
+        <span
+          className={
+            snapshot.status === "nearing"
+              ? "text-amber-400 font-medium"
+              : snapshot.status === "arming"
+                ? "text-emerald-400 font-medium"
+                : snapshot.status === "in_trade"
+                  ? "text-emerald-300 font-medium"
+                  : "text-[var(--color-fg)]"
+          }
+        >
+          {st}
+        </span>
       </div>
       <div className="flex justify-between gap-2 text-[var(--color-fg-muted)]">
         <span>Win rate</span>
@@ -832,7 +983,17 @@ function ScalperPaperPanel({
           ) : null}
         </div>
       ) : (
-        <div className="text-[11px] text-[var(--color-fg-dim)]">Flat</div>
+        <div className="text-[11px] text-[var(--color-fg-dim)]">
+          {snapshot.status === "nearing" ? (
+            <span className="text-amber-400 font-medium">⚠️ Nearing bounce region — arming trade</span>
+          ) : snapshot.status === "arming" ? (
+            <span className="text-emerald-400 font-medium">🟢 Armed — waiting for catalyst buy</span>
+          ) : snapshot.status === "dip" ? (
+            <span className="text-sky-400">Dipped — waiting for zone alignment</span>
+          ) : (
+            <span>Flat</span>
+          )}
+        </div>
       )}
     </>,
   );

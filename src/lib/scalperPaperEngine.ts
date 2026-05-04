@@ -2,10 +2,18 @@ import type { PumpPortalLiveRow } from "@/hooks/usePumpPortalTrades";
 import type { BondingSnapshot } from "@/lib/pumpPaperBondingSim";
 import { simulatePumpPaperRoundTripSol } from "@/lib/pumpPaperBondingSim";
 import { SCALPER_PAPER_CONFIG } from "@/lib/scalperPaperConfig";
+import type { ScalperUserConfig } from "@/context/AppContext";
 
-const C = SCALPER_PAPER_CONFIG;
-
-export type ScalperPaperStatus = "watching" | "dip" | "armed";
+/**
+ * Lifecycle the sidebar mirrors.
+ *
+ *  watching  → price not dipped, not near any zone
+ *  nearing   → price dipped AND is within NEARING_ZONE_PCT of a bounce zone (pre-arm signal)
+ *  dip       → price dipped but zone not yet aligned (or no zones configured)
+ *  arming    → dip + zone aligned, latch open — next qualifying catalyst buy fires entry
+ *  in_trade  → position open
+ */
+export type ScalperPaperStatus = "watching" | "nearing" | "dip" | "arming" | "in_trade";
 
 export type ScalperPaperCurrent = {
   entryMcUsd: number;
@@ -23,10 +31,6 @@ export type BotTradeRowTape = {
   exitMcUsd: number;
   pnlPct: number;
   exitReason: "take_profit" | "order_book_sell";
-  /**
-   * Wallet-style SOL estimate from pump constant-product snapshots on entry/exit prints (~protocol fees).
-   * Omitted when tape lacks reserve fields or token migrated off-curve.
-   */
   paperSolEstimate?: {
     solSpent: number;
     solReceived: number;
@@ -42,11 +46,8 @@ export type BotTradeRowChain = {
   exitReason: "take_profit" | "order_book_sell";
   buySignature: string;
   sellSignature: string;
-  /** SOL magnitude spent on buy (positive). */
   solSpent: number;
-  /** SOL magnitude returned on sell (positive). */
   solReceived: number;
-  /** received − spent (can be negative). */
   netSol: number;
   roiPct: number;
 };
@@ -57,7 +58,6 @@ export function isBotTradeChain(r: BotTradeRow): r is BotTradeRowChain {
   return r.kind === "chain";
 }
 
-/** Bubble markers for chart overlay: paper entry (buy) and exit (sell). */
 export type PaperChartMarker = {
   timeSec: number;
   side: "buy" | "sell";
@@ -66,15 +66,12 @@ export type PaperChartMarker = {
 export type ScalperPaperSnapshot = {
   status: ScalperPaperStatus;
   winRate: number | null;
-  /** Sum of closed-trade PnL % (simple aggregate, not compounded). */
   totalPnlPct: number;
   closedTrades: number;
   wins: number;
   currentTrade: ScalperPaperCurrent | null;
   lastClosedPnlPct: number | null;
-  /** Closed bot round-trips, oldest → newest (newest at end). */
   botTrades: BotTradeRow[];
-  /** Chart bubbles: chronological paper entry/exit times (Unix seconds). */
   paperMarkers: PaperChartMarker[];
 };
 
@@ -89,44 +86,91 @@ function dipFromPeak(peak: number, mc: number): number {
   return ((peak - mc) / peak) * 100;
 }
 
+/** MC must be within this fraction of a zone price for zone-alignment to fire. */
+const BOUNCE_ZONE_PCT = 0.1;
 /**
- * Paper Scalper — behavior is defined by {@link SCALPER_PAPER_CONFIG} (keep preset copy in sync).
+ * "Nearing" window: price is within this fraction BELOW a zone (slightly past it)
+ * OR within NEARING_ABOVE_PCT ABOVE it (approaching from above). No dip required.
+ */
+const NEARING_ZONE_PCT = 0.15;
+/** How far above a zone price can be and still count as "approaching" / nearing. */
+const NEARING_ABOVE_PCT = 0.25;
+/** Drop “armed for catalyst” if tape goes quiet this long after latch opened (ms). */
+const MAX_LATCH_MS = 120_000;
+
+/**
+ * Paper Scalper — behavior is defined by {@link SCALPER_PAPER_CONFIG}.
  *
- * Peak resets to exit MC after each close so the next leg does not arm off a stale ATH in the buffer.
- * Order-book stops ignore sells below `minOrderBookSellSolForStop` when SOL is known; unknown SOL still stops out.
+ * Entries use a **catalyst latch**: once tape shows dip + zone alignment, we arm;
+ * the very next qualifying buy prints entry even if that buy spikes MC out of the dip
+ * on the same row (classic missed-fill bug when dip and catalyst were required together).
  */
 export type ReduceScalperPaperOpts = {
-  /** Only tape rows at or after this timestamp (ms) participate — avoids replaying history when a session arms. */
   minTradeTsMs?: number;
-  /**
-   * Paper-only: assumed Lightning-sized SOL buy per entry — feeds bonding-curve snapshot estimate when
-   * PumpPortal prints include virtual reserves.
-   */
   paperBuySol?: number;
+  scalperConfig?: ScalperUserConfig;
+  /**
+   * Bounce-zone proximity for **opening** the latch only.
+   * Entry after latch does not re-check zones (catalyst row often spikes MC).
+   */
+  activeBounceZonePrices?: number[];
 };
 
 export function reduceScalperPaper(
   rows: PumpPortalLiveRow[],
   opts?: ReduceScalperPaperOpts,
 ): ScalperPaperSnapshot {
+  const C = opts?.scalperConfig
+    ? { ...SCALPER_PAPER_CONFIG, ...opts.scalperConfig }
+    : SCALPER_PAPER_CONFIG;
+
   let chronological = [...rows].sort((a, b) => a.ts - b.ts);
   if (opts?.minTradeTsMs != null) {
     const minTs = opts.minTradeTsMs;
     chronological = chronological.filter((r) => r.ts >= minTs);
   }
 
+  const zones = opts?.activeBounceZonePrices;
+
   let peakMc = 0;
   let pos: Position | null = null;
   let lastMc: number | null = null;
   let lastExitAtMs = 0;
+  let latchActive = false;
+  let latchSinceTs = 0;
+
   const closedPnl: number[] = [];
   const botTrades: BotTradeRow[] = [];
   const paperMarkers: PaperChartMarker[] = [];
   let tradeSeq = 0;
 
+  function zoneOkForMc(mc: number): boolean {
+    if (zones === undefined) return true;
+    if (zones.length === 0) return false;
+    return zones.some((zp) => zp > 0 && Math.abs(mc - zp) / zp <= BOUNCE_ZONE_PCT);
+  }
+
+  /**
+   * True when price is in the "approach corridor" of any zone:
+   *   - within NEARING_ABOVE_PCT (25 %) above the zone price (descending toward it), OR
+   *   - within NEARING_ZONE_PCT (15 %) below it (just overshot, still relevant).
+   * No dip-from-peak requirement — fires even when price is near ATH if a zone is close.
+   */
+  function zoneNearingForMc(mc: number): boolean {
+    if (!zones || zones.length === 0) return false;
+    return zones.some(
+      (zp) => zp > 0 && mc > zp * (1 - NEARING_ZONE_PCT) && mc < zp * (1 + NEARING_ABOVE_PCT),
+    );
+  }
+
   for (const r of chronological) {
     const mc = r.mcUsd;
-    if (mc != null && Number.isFinite(mc) && mc > 0) {
+    const mcValid = mc != null && Number.isFinite(mc) && mc > 0;
+
+    /** Peak from all strictly prior prints — compare dip before we fold this bar into peak. */
+    const priorPeakMc = peakMc;
+
+    if (mcValid) {
       peakMc = Math.max(peakMc, mc);
       lastMc = mc;
     }
@@ -158,6 +202,8 @@ export function reduceScalperPaper(
           peakMc = px;
           lastExitAtMs = r.ts;
           pos = null;
+          latchActive = false;
+          latchSinceTs = 0;
           continue;
         }
         if (px >= pos.entryMcUsd * (1 + C.takeProfitPct / 100)) {
@@ -182,21 +228,52 @@ export function reduceScalperPaper(
           peakMc = px;
           lastExitAtMs = r.ts;
           pos = null;
+          latchActive = false;
+          latchSinceTs = 0;
         }
       }
       continue;
     }
 
-    if (lastExitAtMs > 0 && r.ts - lastExitAtMs < C.reentryCooldownMs) continue;
+    if (lastExitAtMs > 0 && r.ts - lastExitAtMs < C.reentryCooldownMs) {
+      continue;
+    }
 
-    if (mc == null || !Number.isFinite(mc) || mc <= 0 || peakMc <= 0) continue;
+    if (latchActive && latchSinceTs > 0 && r.ts - latchSinceTs > MAX_LATCH_MS) {
+      latchActive = false;
+      latchSinceTs = 0;
+    }
 
-    const dip = dipFromPeak(peakMc, mc);
-    const dipOk = dip > C.dipMinPct;
-    const catalystOk = r.buy && r.sol > C.catalystMinSol;
-    if (dipOk && catalystOk) {
-      pos = { entryMcUsd: mc, catalystSol: r.sol, bondingAtEntry: r.bonding };
+    const catalystBuy =
+      r.buy && r.sol >= C.catalystMinSol && (mcValid || (lastMc != null && lastMc > 0));
+
+    const dipNow =
+      mcValid &&
+      priorPeakMc > 0 &&
+      dipFromPeak(priorPeakMc, mc) > C.dipMinPct;
+
+    const zoneNow = mcValid && zoneOkForMc(mc);
+
+    if (dipNow && zoneNow) {
+      latchActive = true;
+      if (latchSinceTs === 0) latchSinceTs = r.ts;
+    }
+
+    const entryMc = mcValid ? mc! : lastMc;
+    const entryOk = entryMc != null && entryMc > 0 && Number.isFinite(entryMc);
+
+    if (latchActive && catalystBuy && entryOk) {
+      pos = { entryMcUsd: entryMc!, catalystSol: r.sol, bondingAtEntry: r.bonding };
       paperMarkers.push({ timeSec: Math.floor(r.ts / 1000), side: "buy" });
+      latchActive = false;
+      latchSinceTs = 0;
+    }
+
+    if (!pos && latchActive && lastMc != null && peakMc > 0) {
+      if (dipFromPeak(peakMc, lastMc) <= C.dipMinPct) {
+        latchActive = false;
+        latchSinceTs = 0;
+      }
     }
   }
 
@@ -205,11 +282,21 @@ export function reduceScalperPaper(
   const winRate = n > 0 ? (wins / n) * 100 : null;
   const totalPnlPct = closedPnl.reduce((s, p) => s + p, 0);
 
+  const fullDip =
+    lastMc != null && peakMc > 0 && dipFromPeak(peakMc, lastMc) > C.dipMinPct;
+
   let status: ScalperPaperStatus = "watching";
   if (pos) {
-    status = "armed";
-  } else if (lastMc != null && peakMc > 0 && dipFromPeak(peakMc, lastMc) > C.dipMinPct) {
+    status = "in_trade";
+  } else if (latchActive) {
+    status = "arming";
+  } else if (fullDip) {
+    // Dipped past threshold but zone not yet aligned (or no zones) — latch would be open if aligned
     status = "dip";
+  } else if (lastMc != null && zoneNearingForMc(lastMc)) {
+    // Price is in the approach corridor of a zone (up to 25 % above or 15 % below)
+    // No dip requirement — fires immediately when user moves a zone near current price
+    status = "nearing";
   }
 
   let currentTrade: ScalperPaperCurrent | null = null;

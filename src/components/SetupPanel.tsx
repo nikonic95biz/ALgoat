@@ -25,6 +25,7 @@ import { fetchOpenAiCompatibleModelList } from "@/lib/fetchLlmModels";
 import { githubForkUpstreamIntoViewerAccount } from "@/lib/githubApi";
 import { getDefaultGithubUpstream } from "@/lib/githubUpstreamDefaults";
 import { computeSetupSteps } from "@/lib/setupProgress";
+import { isFileSystemAccessSupported } from "@/lib/localWorkspace";
 
 const PORTAL_SETUP_URL = "https://pumpportal.fun/trading-api/setup";
 
@@ -45,7 +46,7 @@ function setupSectionCardClass(ok: boolean): string {
 
 export function SetupPanel() {
   const rev = usePumpPortalConfigRevision();
-  const { model, setModel, githubWorkspace, setGithubWorkspace } = useApp();
+  const { model, setModel, githubWorkspace, setGithubWorkspace, localWorkspaceHandle, connectLocalWorkspace, disconnectLocalWorkspace } = useApp();
 
   const [draftPumpKey, setDraftPumpKey] = useState(getStoredPumpPortalApiKey);
   const [draftTradingWalletSecret, setDraftTradingWalletSecret] = useState(getStoredPumpPortalTradingWalletSecret);
@@ -57,6 +58,8 @@ export function SetupPanel() {
   const upstreamForkTarget = useMemo(() => getDefaultGithubUpstream(), []);
   const [githubAssistBusy, setGithubAssistBusy] = useState<null | "login" | "fork">(null);
   const [githubAssistErr, setGithubAssistErr] = useState<string | null>(null);
+  const [localWsErr, setLocalWsErr] = useState<string | null>(null);
+  const [localWsBusy, setLocalWsBusy] = useState(false);
 
   /** Latest PumpPortal draft — used to flush to localStorage when Setup unmounts (sidebar tab switch). */
   const draftPumpKeyRef = useRef(draftPumpKey);
@@ -554,7 +557,68 @@ export function SetupPanel() {
               ✓ Connected to {githubWorkspace.owner}/{githubWorkspace.repo}
             </p>
           ) : null}
-          
+
+          {/* Local workspace — instant HMR edits from chat */}
+          <div className="border-t border-[var(--color-border-subtle)] pt-4">
+            <h3 className="unt-field-label mb-1">Local workspace (instant edits)</h3>
+            <p className="unt-help-text mb-3">
+              Point chat at your local clone of the repo. File edits from chat are written
+              directly to disk — Vite HMR reloads the app instantly, no GitHub commit needed.
+              A <span className="font-medium text-[var(--color-fg-muted)]">Push to GitHub</span> button
+              appears in the chat footer to sync when you&apos;re ready.
+            </p>
+            {!isFileSystemAccessSupported() ? (
+              <p className="unt-help-text text-amber-400/80">
+                Not supported in this browser. Use Chrome or Edge for local workspace access.
+              </p>
+            ) : localWorkspaceHandle ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-[color-mix(in_srgb,#22d3ee_20%,transparent)] bg-[color-mix(in_srgb,#22d3ee_5%,transparent)] px-3 py-2">
+                  <span className="size-1.5 shrink-0 rounded-full bg-cyan-400/70" />
+                  <span className="truncate font-mono text-[11px] text-cyan-300/70">
+                    {localWorkspaceHandle.name}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={disconnectLocalWorkspace}
+                  className="shrink-0 rounded-md border border-[var(--color-border)] px-3 py-2 text-[12px] text-[var(--color-fg-muted)] transition-colors hover:border-[rgba(255,255,255,0.2)] hover:text-[var(--color-fg)]"
+                >
+                  Disconnect
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                disabled={localWsBusy}
+                onClick={async () => {
+                  setLocalWsBusy(true);
+                  setLocalWsErr(null);
+                  try {
+                    await connectLocalWorkspace();
+                  } catch (e) {
+                    if (!(e instanceof Error && e.name === "AbortError")) {
+                      setLocalWsErr(e instanceof Error ? e.message : String(e));
+                    }
+                  } finally {
+                    setLocalWsBusy(false);
+                  }
+                }}
+                className="unt-btn-primary w-full px-4 py-2.5 text-[13px] font-medium disabled:opacity-50"
+              >
+                {localWsBusy ? (
+                  <span className="inline-flex items-center justify-center gap-2">
+                    <Loader2 className="size-4 animate-spin" aria-hidden />
+                    Opening folder picker…
+                  </span>
+                ) : (
+                  "Connect local workspace folder"
+                )}
+              </button>
+            )}
+            {localWsErr ? <p className="unt-help-text mt-2 font-medium text-red-400/90">{localWsErr}</p> : null}
+          </div>
+
         </section>
       </div>
     </div>
