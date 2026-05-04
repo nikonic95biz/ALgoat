@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Check, Loader2 } from "lucide-react";
 import { usePumpPortalConfigRevision } from "@/hooks/usePumpPortalConfigRevision";
 import { useApp } from "@/context/AppContext";
 import { getStoredSolanaRpcUrl, setStoredSolanaRpcUrl, getSolanaRpcUrl } from "@/lib/solanaRpc";
@@ -60,6 +60,8 @@ export function SetupPanel() {
   const [githubAssistErr, setGithubAssistErr] = useState<string | null>(null);
   const [localWsErr, setLocalWsErr] = useState<string | null>(null);
   const [localWsBusy, setLocalWsBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /** Latest PumpPortal draft — used to flush to localStorage when Setup unmounts (sidebar tab switch). */
   const draftPumpKeyRef = useRef(draftPumpKey);
@@ -272,6 +274,20 @@ export function SetupPanel() {
     }
   }
 
+  function handleSave() {
+    // Flush all drafts immediately (auto-save already does this debounced;
+    // the explicit Save button commits them right now).
+    setStoredPumpPortalApiKey(draftPumpKey);
+    refreshPumpPortalSocket();
+    setStoredPumpPortalTradingWalletSecret(draftTradingWalletSecret);
+    setStoredSolanaRpcUrl(draftRpcUrl);
+    setModel({ apiKey: draftLlmKey });
+
+    setSaved(true);
+    if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+    savedTimerRef.current = setTimeout(() => setSaved(false), 2200);
+  }
+
   return (
     <div
       className="flex h-full flex-col overflow-hidden"
@@ -474,18 +490,21 @@ export function SetupPanel() {
           </div>
         </section>
 
-        <section className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-fill)] p-4 space-y-3">
-          <div>
-            <h2 className="unt-section-title">Solana RPC <span className="font-normal text-[var(--color-fg-dim)]">· optional</span></h2>
-            <p className="unt-help-text mt-2">
-              Three things call the Solana RPC: <strong className="text-[var(--color-fg-muted)]">token supply</strong> (accurate MC axis on the chart),{" "}
-              <strong className="text-[var(--color-fg-muted)]">wallet SOL balance</strong> (the balance chip in Setup), and{" "}
-              <strong className="text-[var(--color-fg-muted)]">trade confirmation</strong> (polling for buy/sell on-chain status after a Lightning trade).
-              The default public endpoint is rate-limited and blocks browser origins — paste a free{" "}
-              <a href="https://helius.dev" target="_blank" rel="noreferrer" className="font-medium text-[#2EA8FF] underline-offset-2 hover:underline">Helius</a>{" "}
-              or any mainnet RPC URL to keep all three working reliably.
-            </p>
+        <section className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-fill)] p-4 space-y-3 border-l-[3px] border-l-[var(--color-border-subtle)]">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="unt-section-title">Solana RPC</h2>
+            <span className="rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-fill)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-fg-dim)]">
+              optional · not counted in 4/4
+            </span>
           </div>
+          <p className="unt-help-text">
+            Three things call the Solana RPC: <strong className="text-[var(--color-fg-muted)]">token supply</strong> (accurate MC axis on the chart),{" "}
+            <strong className="text-[var(--color-fg-muted)]">wallet SOL balance</strong> (the balance chip in Setup), and{" "}
+            <strong className="text-[var(--color-fg-muted)]">trade confirmation</strong> (polling for buy/sell on-chain status after a Lightning trade).
+            The default public endpoint is rate-limited and blocks browser origins — paste a free{" "}
+            <a href="https://helius.dev" target="_blank" rel="noreferrer" className="font-medium text-[#2EA8FF] underline-offset-2 hover:underline">Helius</a>{" "}
+            or any mainnet RPC URL to keep all three working reliably.
+          </p>
           <div>
             <label className="unt-field-label">RPC URL</label>
             <input
@@ -534,7 +553,7 @@ export function SetupPanel() {
             type="button"
             disabled={!githubWorkspace.token.trim() || githubAssistBusy !== null}
             onClick={() => void githubAssistForkConnect()}
-            className="unt-btn-primary w-full px-4 py-2.5 text-[13px] font-medium disabled:opacity-50"
+            className="flex w-full items-center justify-center gap-2 rounded-[10px] border border-emerald-500/50 bg-emerald-500/[0.10] px-4 py-2.5 text-[13px] font-semibold text-emerald-300 transition-colors hover:border-emerald-500/70 hover:bg-emerald-500/[0.18] disabled:cursor-not-allowed disabled:opacity-40"
             title={`Fork ${upstreamForkTarget.owner}/${upstreamForkTarget.repo} into your account (GitHub API) and wire Owner / Repo / Branch`}
           >
             {githubAssistBusy === "fork" ? (
@@ -604,13 +623,13 @@ export function SetupPanel() {
                     setLocalWsBusy(false);
                   }
                 }}
-                className="unt-btn-primary w-full px-4 py-2.5 text-[13px] font-medium disabled:opacity-50"
+                className="flex w-full items-center justify-center gap-2 rounded-[10px] border border-emerald-500/50 bg-emerald-500/[0.10] px-4 py-2.5 text-[13px] font-semibold text-emerald-300 transition-colors hover:border-emerald-500/70 hover:bg-emerald-500/[0.18] disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {localWsBusy ? (
-                  <span className="inline-flex items-center justify-center gap-2">
+                  <>
                     <Loader2 className="size-4 animate-spin" aria-hidden />
                     Opening folder picker…
-                  </span>
+                  </>
                 ) : (
                   "Connect local workspace folder"
                 )}
@@ -620,6 +639,29 @@ export function SetupPanel() {
           </div>
 
         </section>
+      </div>
+
+      {/* Sticky save footer */}
+      <div className="shrink-0 border-t border-[var(--color-border-subtle)] bg-[var(--color-bg-sideBar)] px-4 py-3">
+        <button
+          type="button"
+          onClick={handleSave}
+          className={
+            "flex w-full items-center justify-center gap-2 rounded-[10px] border px-4 py-2.5 text-[13px] font-semibold transition-all duration-150 " +
+            (saved
+              ? "border-emerald-500/60 bg-emerald-500/[0.14] text-emerald-300"
+              : "border-emerald-500/50 bg-emerald-500/[0.10] text-emerald-300 hover:border-emerald-500/70 hover:bg-emerald-500/[0.18]")
+          }
+        >
+          {saved ? (
+            <>
+              <Check className="size-4" strokeWidth={2.5} />
+              Saved
+            </>
+          ) : (
+            "Save settings"
+          )}
+        </button>
       </div>
     </div>
   );
