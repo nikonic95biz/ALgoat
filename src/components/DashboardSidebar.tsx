@@ -11,8 +11,13 @@ import {
   getPumpPortalTradingWalletPubkey,
 } from "@/lib/pumpPortalConfig";
 import { SCALPER_PAPER_CONFIG } from "@/lib/scalperPaperConfig";
-import { formatUsdCompact } from "@/lib/formatUsd";
-import type { ScalperPaperSnapshot } from "@/lib/scalperPaperEngine";
+import { formatUsdCompact, formatSol } from "@/lib/formatUsd";
+import {
+  isBotTradeChain,
+  type BotTradeRow,
+  type BotTradeRowTape,
+  type ScalperPaperSnapshot,
+} from "@/lib/scalperPaperEngine";
 import { SetupPanel } from "@/components/SetupPanel";
 import { WorkspacePanel } from "@/components/WorkspacePanel";
 import { usePumpPortalConfigRevision } from "@/hooks/usePumpPortalConfigRevision";
@@ -157,6 +162,7 @@ function AnalyticsPanel() {
                   }
                   tradingMode={tradingMode}
                   liveEntrySol={scalperLiveBuySol}
+                  liveChainTrades={chartAnalytics.realBotTrades}
                 />
               </div>
             ) : selectedAlgoId != null ? (
@@ -342,14 +348,15 @@ function AnalyticsPanel() {
                   {scalperLiveBuySol} SOL each (Live entry size above).
                 </p>
                 <BotTradesBook
-                  rows={chartAnalytics.paperScalper?.botTrades ?? []}
-                  emptyHint={botTradesBookEmptyHint(chartAnalytics.paperScalper)}
+                  rows={chartAnalytics.realBotTrades}
+                  emptyHint="No on-chain round-trips logged yet. After a sell confirms, we parse buy+sell txs via RPC (Setup wallet secret required)."
                 />
               </>
             ) : (
               <BotTradesBook
                 rows={chartAnalytics.paperScalper?.botTrades ?? []}
                 emptyHint={botTradesBookEmptyHint(chartAnalytics.paperScalper)}
+                paperMode
               />
             )}
           </div>
@@ -413,6 +420,7 @@ function ScalperPaperPanel({
   paperSessionActive,
   tradingMode,
   liveEntrySol,
+  liveChainTrades,
 }: {
   snapshot: ScalperPaperSnapshot | null;
   mint: string | null;
@@ -420,6 +428,7 @@ function ScalperPaperPanel({
   paperSessionActive: boolean;
   tradingMode: TradingMode;
   liveEntrySol: number;
+  liveChainTrades: BotTradeRow[];
 }) {
   const wrap = (belowRules: ReactNode) => (
     <div
@@ -463,6 +472,22 @@ function ScalperPaperPanel({
         ? `Dip — waiting for a ${SCALPER_PAPER_CONFIG.catalystMinSol}+ SOL buy on the tape`
         : "In a trade";
 
+  const chainLegs =
+    tradingMode === "real" ? liveChainTrades.filter(isBotTradeChain) : [];
+  const chainClosed = chainLegs.length;
+  const chainWins = chainLegs.filter((t) => t.netSol > 0).length;
+  const chainWinRate = chainClosed > 0 ? (chainWins / chainClosed) * 100 : null;
+  const chainNetSum = chainLegs.reduce((s, t) => s + t.netSol, 0);
+
+  const tapePaperEstLegs: (BotTradeRowTape & { paperSolEstimate: NonNullable<BotTradeRowTape["paperSolEstimate"]> })[] =
+    tradingMode === "paper"
+      ? snapshot.botTrades.filter(
+          (t): t is BotTradeRowTape & { paperSolEstimate: NonNullable<BotTradeRowTape["paperSolEstimate"]> } =>
+            t.kind === "tape" && t.paperSolEstimate != null,
+        )
+      : [];
+  const paperEstNetSum = tapePaperEstLegs.reduce((s, t) => s + t.paperSolEstimate.netSol, 0);
+
   return wrap(
     <>
       <div className="flex justify-between gap-2 text-[var(--color-fg-muted)]">
@@ -472,18 +497,64 @@ function ScalperPaperPanel({
       <div className="flex justify-between gap-2 text-[var(--color-fg-muted)]">
         <span>Win rate</span>
         <span className="text-[var(--color-fg)]">
-          {snapshot.winRate != null ? snapshot.winRate.toFixed(1) + "%" : "—"}
+          {tradingMode === "real"
+            ? chainWinRate != null
+              ? chainWinRate.toFixed(1) + "%"
+              : "—"
+            : snapshot.winRate != null
+              ? snapshot.winRate.toFixed(1) + "%"
+              : "—"}
         </span>
       </div>
       <div className="flex justify-between gap-2 text-[var(--color-fg-muted)]">
-        <span>PnL (sum %)</span>
-        <span className={snapshot.totalPnlPct >= 0 ? "text-emerald-300" : "text-red-400"}>
-          {(snapshot.totalPnlPct >= 0 ? "+" : "") + snapshot.totalPnlPct.toFixed(2) + "%"}
+        <span title={tradingMode === "real" ? "Wallet SOL net across confirmed Lightning legs (buy+sell txs)" : "Sum of tape MC Δ% (paper sim)"}>
+          {tradingMode === "real" ? "Net Σ SOL" : "MC Δ sum"}
+        </span>
+        <span
+          className={
+            tradingMode === "real"
+              ? chainClosed > 0
+                ? chainNetSum >= 0
+                  ? "text-emerald-300"
+                  : "text-red-400"
+                : "text-[var(--color-fg)]"
+              : snapshot.totalPnlPct >= 0
+                ? "text-emerald-300"
+                : "text-red-400"
+          }
+        >
+          {tradingMode === "real"
+            ? chainClosed > 0
+              ? (chainNetSum >= 0 ? "+" : "") + formatSol(chainNetSum)
+              : "—"
+            : (snapshot.totalPnlPct >= 0 ? "+" : "") + snapshot.totalPnlPct.toFixed(2) + "%"}
         </span>
       </div>
+      {tradingMode === "paper" && snapshot.closedTrades > 0 ? (
+        <div className="flex justify-between gap-2 text-[var(--color-fg-muted)]">
+          <span title="Sum of Est. net SOL where both entry and exit prints carried bonding reserves (~fees)">
+            Est. net Σ SOL
+          </span>
+          <span
+            className={
+              tapePaperEstLegs.length > 0
+                ? paperEstNetSum >= 0
+                  ? "text-cyan-300/95"
+                  : "text-orange-300/95"
+                : "text-[var(--color-fg)]"
+            }
+          >
+            {tapePaperEstLegs.length > 0
+              ? (paperEstNetSum >= 0 ? "+" : "") + formatSol(paperEstNetSum)
+              : "—"}
+          </span>
+        </div>
+      ) : null}
       <div className="flex justify-between gap-2 text-[var(--color-fg-muted)]">
         <span>Closed trades</span>
-        <span className="text-[var(--color-fg)]">{snapshot.closedTrades}</span>
+        <span className="text-[var(--color-fg)]">
+          {tradingMode === "real" ? chainClosed : snapshot.closedTrades}
+        </span>
       </div>
       <div className="border-t border-[var(--color-border-subtle)] pt-2">
         <div className="unt-section-overline">Current trade</div>
@@ -507,6 +578,9 @@ function ScalperPaperPanel({
                   snapshot.currentTrade.unrealizedPct.toFixed(2) +
                   "%"}
               </span>
+              {tradingMode === "real" ? (
+                <span className="text-[var(--color-fg-dim)]"> (tape MC)</span>
+              ) : null}
             </div>
           ) : null}
         </div>

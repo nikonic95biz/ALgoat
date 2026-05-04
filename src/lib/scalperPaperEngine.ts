@@ -1,4 +1,6 @@
 import type { PumpPortalLiveRow } from "@/hooks/usePumpPortalTrades";
+import type { BondingSnapshot } from "@/lib/pumpPaperBondingSim";
+import { simulatePumpPaperRoundTripSol } from "@/lib/pumpPaperBondingSim";
 import { SCALPER_PAPER_CONFIG } from "@/lib/scalperPaperConfig";
 
 const C = SCALPER_PAPER_CONFIG;
@@ -12,15 +14,48 @@ export type ScalperPaperCurrent = {
   unrealizedPct: number | null;
 };
 
-/** One closed round-trip the bot recorded (paper or real). */
-export type BotTradeRow = {
+/** One closed round-trip — paper uses tape MC; live uses parsed on-chain SOL deltas. */
+export type BotTradeRowTape = {
+  kind: "tape";
   id: string;
   closedAtTs: number;
   entryMcUsd: number;
   exitMcUsd: number;
   pnlPct: number;
   exitReason: "take_profit" | "order_book_sell";
+  /**
+   * Wallet-style SOL estimate from pump constant-product snapshots on entry/exit prints (~protocol fees).
+   * Omitted when tape lacks reserve fields or token migrated off-curve.
+   */
+  paperSolEstimate?: {
+    solSpent: number;
+    solReceived: number;
+    netSol: number;
+    roiPct: number;
+  };
 };
+
+export type BotTradeRowChain = {
+  kind: "chain";
+  id: string;
+  closedAtTs: number;
+  exitReason: "take_profit" | "order_book_sell";
+  buySignature: string;
+  sellSignature: string;
+  /** SOL magnitude spent on buy (positive). */
+  solSpent: number;
+  /** SOL magnitude returned on sell (positive). */
+  solReceived: number;
+  /** received − spent (can be negative). */
+  netSol: number;
+  roiPct: number;
+};
+
+export type BotTradeRow = BotTradeRowTape | BotTradeRowChain;
+
+export function isBotTradeChain(r: BotTradeRow): r is BotTradeRowChain {
+  return r.kind === "chain";
+}
 
 /** Bubble markers for chart overlay: paper entry (buy) and exit (sell). */
 export type PaperChartMarker = {
@@ -46,6 +81,7 @@ export type ScalperPaperSnapshot = {
 type Position = {
   entryMcUsd: number;
   catalystSol: number;
+  bondingAtEntry: BondingSnapshot | null;
 };
 
 function dipFromPeak(peak: number, mc: number): number {
@@ -62,6 +98,11 @@ function dipFromPeak(peak: number, mc: number): number {
 export type ReduceScalperPaperOpts = {
   /** Only tape rows at or after this timestamp (ms) participate — avoids replaying history when a session arms. */
   minTradeTsMs?: number;
+  /**
+   * Paper-only: assumed Lightning-sized SOL buy per entry — feeds bonding-curve snapshot estimate when
+   * PumpPortal prints include virtual reserves.
+   */
+  paperBuySol?: number;
 };
 
 export function reduceScalperPaper(
@@ -99,13 +140,19 @@ export function reduceScalperPaper(
           const pnl = ((px - pos.entryMcUsd) / pos.entryMcUsd) * 100;
           closedPnl.push(pnl);
           tradeSeq += 1;
+          const paperSolEstimate =
+            opts?.paperBuySol != null && pos.bondingAtEntry != null && r.bonding != null
+              ? simulatePumpPaperRoundTripSol(pos.bondingAtEntry, r.bonding, opts.paperBuySol) ?? undefined
+              : undefined;
           botTrades.push({
+            kind: "tape",
             id: `paper-${r.ts}-${tradeSeq}`,
             closedAtTs: r.ts,
             entryMcUsd: pos.entryMcUsd,
             exitMcUsd: px,
             pnlPct: pnl,
             exitReason: "order_book_sell",
+            ...(paperSolEstimate ? { paperSolEstimate } : {}),
           });
           paperMarkers.push({ timeSec: Math.floor(r.ts / 1000), side: "sell" });
           peakMc = px;
@@ -117,13 +164,19 @@ export function reduceScalperPaper(
           const pnl = ((px - pos.entryMcUsd) / pos.entryMcUsd) * 100;
           closedPnl.push(pnl);
           tradeSeq += 1;
+          const paperSolEstimate =
+            opts?.paperBuySol != null && pos.bondingAtEntry != null && r.bonding != null
+              ? simulatePumpPaperRoundTripSol(pos.bondingAtEntry, r.bonding, opts.paperBuySol) ?? undefined
+              : undefined;
           botTrades.push({
+            kind: "tape",
             id: `paper-${r.ts}-${tradeSeq}`,
             closedAtTs: r.ts,
             entryMcUsd: pos.entryMcUsd,
             exitMcUsd: px,
             pnlPct: pnl,
             exitReason: "take_profit",
+            ...(paperSolEstimate ? { paperSolEstimate } : {}),
           });
           paperMarkers.push({ timeSec: Math.floor(r.ts / 1000), side: "sell" });
           peakMc = px;
@@ -142,7 +195,7 @@ export function reduceScalperPaper(
     const dipOk = dip > C.dipMinPct;
     const catalystOk = r.buy && r.sol > C.catalystMinSol;
     if (dipOk && catalystOk) {
-      pos = { entryMcUsd: mc, catalystSol: r.sol };
+      pos = { entryMcUsd: mc, catalystSol: r.sol, bondingAtEntry: r.bonding };
       paperMarkers.push({ timeSec: Math.floor(r.ts / 1000), side: "buy" });
     }
   }

@@ -31,6 +31,20 @@ export function formatMcUsdBook(n: number): string {
   return `${sign}${v.toFixed(4)}`;
 }
 
+/**
+ * MC with tighter rounding than {@link formatMcUsdBook} — keeps %-checks aligned with brief MC moves (scalper trade log).
+ */
+export function formatMcUsdBookDetail(n: number): string {
+  if (!Number.isFinite(n) || n === 0) return "—";
+  const sign = n < 0 ? "-" : "";
+  const v = Math.abs(n);
+  if (v >= 1e9) return `${sign}${(v / 1e9).toFixed(3)}B`;
+  if (v >= 1e6) return `${sign}${(v / 1e6).toFixed(3)}M`;
+  if (v >= 1e3) return `${sign}${(v / 1e3).toFixed(2)}K`;
+  if (v >= 1) return `${sign}${v.toFixed(2)}`;
+  return `${sign}${v.toFixed(4)}`;
+}
+
 /** Token amount column: `5.31M`, `3.74M`. */
 export function formatTokenQtyBook(n: number): string {
   if (!Number.isFinite(n) || n === 0) return "—";

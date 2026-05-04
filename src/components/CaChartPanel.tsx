@@ -42,12 +42,14 @@ import {
   saveChartTimezoneChoice,
   type ChartTimezoneChoice,
 } from "@/lib/chartTimezone";
-import { reduceScalperPaper } from "@/lib/scalperPaperEngine";
+import { reduceScalperPaper, type BotTradeRowChain } from "@/lib/scalperPaperEngine";
 import { SCALPER_PAPER_CONFIG } from "@/lib/scalperPaperConfig";
 import {
   appendPumpPortalTradingWalletHint,
   getEffectivePumpPortalApiKey,
+  getPumpPortalTradingWalletPubkey,
 } from "@/lib/pumpPortalConfig";
+import { fetchWalletSolDeltaSol } from "@/lib/solanaTxSolDelta";
 import { postPumpPortalLightningTrade, confirmLightningTx } from "@/lib/pumpPortalLightningTrade";
 
 /** Dark trading terminal palette (high-contrast teal up / coral down on charcoal). */
@@ -249,6 +251,8 @@ export function CaChartPanel() {
   const [scalperCutoffMs, setScalperCutoffMs] = useState<number | null>(null);
   const [livePumpPortalSig, setLivePumpPortalSig] = useState<string | null>(null);
   const [livePumpPortalErr, setLivePumpPortalErr] = useState<string | null>(null);
+  /** Confirmed Lightning round-trips with RPC-parsed wallet SOL (real mode only). */
+  const [liveChainTrades, setLiveChainTrades] = useState<BotTradeRowChain[]>([]);
   const [chartSessionNotice, setChartSessionNotice] = useState<string | null>(null);
 
   useEffect(() => {
@@ -379,6 +383,8 @@ export function CaChartPanel() {
     if (tradingMode === "real") {
       setLivePumpPortalSig(null);
       setLivePumpPortalErr(null);
+      setLiveChainTrades([]);
+      pendingLiveBuySigRef.current = null;
     }
   }, [algoSessionActive, selectedAlgoId, mintLoaded, tradingMode]);
 
@@ -386,16 +392,28 @@ export function CaChartPanel() {
     if (tradingMode !== "real") {
       setLivePumpPortalSig(null);
       setLivePumpPortalErr(null);
+      setLiveChainTrades([]);
+      pendingLiveBuySigRef.current = null;
     }
   }, [tradingMode]);
 
+  useEffect(() => {
+    if (tradingMode !== "real") return;
+    setLiveChainTrades([]);
+    pendingLiveBuySigRef.current = null;
+  }, [mintLoaded, tradingMode]);
+
   const paperScalper = useMemo(() => {
     if (!scalperEngineRunning || !mintLoaded || scalperCutoffMs == null) return null;
-    return reduceScalperPaper(liveRowsForMc, { minTradeTsMs: scalperCutoffMs });
-  }, [scalperEngineRunning, mintLoaded, liveRowsForMc, scalperCutoffMs]);
+    return reduceScalperPaper(liveRowsForMc, {
+      minTradeTsMs: scalperCutoffMs,
+      paperBuySol: tradingMode === "paper" ? scalperLiveBuySol : undefined,
+    });
+  }, [scalperEngineRunning, mintLoaded, liveRowsForMc, scalperCutoffMs, tradingMode, scalperLiveBuySol]);
 
   const prevLiveOpenRef = useRef<boolean | undefined>(undefined);
   const lastLiveTxAtRef = useRef(0);
+  const pendingLiveBuySigRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (tradingMode !== "real" || !algoSessionActive || tradingHalted) {
@@ -438,6 +456,11 @@ export function CaChartPanel() {
 
       const R = SCALPER_PAPER_CONFIG;
       const action = maybeBuy ? "buy" : "sell";
+      const tapeSnapshot = paperScalper.botTrades;
+      const lastTape = tapeSnapshot[tapeSnapshot.length - 1];
+      const exitReason =
+        lastTape?.kind === "tape" ? lastTape.exitReason : "order_book_sell";
+
       void (async () => {
         const res = await postPumpPortalLightningTrade(apiKey, {
           action,
@@ -452,18 +475,79 @@ export function CaChartPanel() {
           setLivePumpPortalErr(appendPumpPortalTradingWalletHint(res.message));
           return;
         }
-        // Show signature immediately so user can see it, then confirm on-chain
         setLivePumpPortalSig(`${action.toUpperCase()} confirming… ${res.signature}`);
         setLivePumpPortalErr(null);
         const { confirmed, err } = await confirmLightningTx(res.signature);
-        if (confirmed) {
-          setLivePumpPortalSig(res.signature);
-        } else {
+        if (!confirmed) {
           setLivePumpPortalSig(null);
           setLivePumpPortalErr(
             appendPumpPortalTradingWalletHint(err ?? "Tx did not confirm — check explorer"),
           );
+          return;
         }
+
+        setLivePumpPortalSig(res.signature);
+
+        if (maybeBuy) {
+          pendingLiveBuySigRef.current = res.signature;
+          return;
+        }
+
+        const buySig = pendingLiveBuySigRef.current;
+        pendingLiveBuySigRef.current = null;
+        const walletPk = getPumpPortalTradingWalletPubkey();
+
+        if (!buySig) {
+          setLivePumpPortalErr(
+            appendPumpPortalTradingWalletHint(
+              "Sell landed on-chain but session had no confirmed buy signature — add PnL row from Solscan manually if needed.",
+            ),
+          );
+          return;
+        }
+
+        if (!walletPk) {
+          setLivePumpPortalErr(
+            appendPumpPortalTradingWalletHint(
+              "Sell confirmed — paste your PumpPortal trading wallet secret in Setup to log on-chain SOL PnL automatically.",
+            ),
+          );
+          return;
+        }
+
+        const buyDelta = await fetchWalletSolDeltaSol(buySig, walletPk);
+        const sellDelta = await fetchWalletSolDeltaSol(res.signature, walletPk);
+
+        if (buyDelta == null || sellDelta == null) {
+          setLivePumpPortalErr(
+            appendPumpPortalTradingWalletHint(
+              "Sell confirmed — RPC could not read wallet balance deltas yet. Retry Solscan or check your RPC / Helius key.",
+            ),
+          );
+          return;
+        }
+
+        const solSpent = Math.max(0, -buyDelta);
+        const solReceived = Math.max(0, sellDelta);
+        const netSol = buyDelta + sellDelta;
+        const roiPct = solSpent > 0 ? (netSol / solSpent) * 100 : 0;
+
+        setLivePumpPortalErr(null);
+        setLiveChainTrades((prev) => [
+          ...prev,
+          {
+            kind: "chain",
+            id: `chain-${res.signature}`,
+            closedAtTs: Date.now(),
+            exitReason,
+            buySignature: buySig,
+            sellSignature: res.signature,
+            solSpent,
+            solReceived,
+            netSol,
+            roiPct,
+          },
+        ]);
       })();
       return;
     }
@@ -487,6 +571,7 @@ export function CaChartPanel() {
       paperScalper,
       livePumpPortalLastSig: livePumpPortalSig,
       livePumpPortalLastErr: livePumpPortalErr,
+      realBotTrades: tradingMode === "real" ? liveChainTrades : [],
     });
   }, [
     mintLoaded,
@@ -504,6 +589,8 @@ export function CaChartPanel() {
     paperScalper,
     livePumpPortalSig,
     livePumpPortalErr,
+    liveChainTrades,
+    tradingMode,
     setChartAnalytics,
   ]);
 

@@ -42,6 +42,13 @@ export function buildLiveContext(snap: LiveContextSnapshot): string {
     if (ca.livePumpPortalLastErr) {
       lines.push(`- Live trading error: ${ca.livePumpPortalLastErr}`);
     }
+    const legs = ca.realBotTrades.filter((r) => r.kind === "chain");
+    if (legs.length > 0) {
+      const net = legs.reduce((s, r) => s + r.netSol, 0);
+      lines.push(
+        `- On-chain scalper legs (this session): ${legs.length} · wallet net Σ SOL ${net >= 0 ? "+" : ""}${net.toFixed(4)}`,
+      );
+    }
   }
 
   lines.push("");

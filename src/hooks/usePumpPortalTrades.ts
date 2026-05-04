@@ -6,6 +6,8 @@ import {
   subscribePumpPortalTokenTrades,
 } from "@/lib/pumpPortalRealtime";
 
+import { parseBondingSnapshotFromMsg, type BondingSnapshot } from "@/lib/pumpPaperBondingSim";
+
 export type PumpPortalLiveRow = {
   id: string;
   ts: number;
@@ -15,6 +17,8 @@ export type PumpPortalLiveRow = {
   /** Normalized token amount for display (UI units when possible). */
   tokenAmount: number | null;
   trader: string | null;
+  /** Bonding-curve reserves when the WS payload includes them (for paper SOL estimates). */
+  bonding: BondingSnapshot | null;
 };
 
 type ConnState = "idle" | "connecting" | "open" | "closed" | "error";
@@ -247,6 +251,8 @@ export function usePumpPortalTrades(mint: string | null, maxRows = 80) {
             (++synthSeqRef.current).toString(36),
           ].join("-");
 
+        const bonding = parseBondingSnapshotFromMsg(m);
+
         const row: PumpPortalLiveRow = {
           id: sig,
           ts: eventTimestamp(m),
@@ -255,6 +261,7 @@ export function usePumpPortalTrades(mint: string | null, maxRows = 80) {
           mcUsd,
           tokenAmount: parseTokenAmount(m),
           trader: parseTrader(m),
+          bonding,
         };
 
         setRows((prev) => {
