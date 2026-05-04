@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { BotTradeRow, ScalperPaperSnapshot } from "@/lib/scalperPaperEngine";
+import type { BotTradeRow, BotTradeRowChain, BotTradeRowTape, ScalperPaperSnapshot } from "@/lib/scalperPaperEngine";
 import { createAssistantGreetingMessage } from "@/lib/chatGreeting";
 import { inferBackendIdFromBaseUrl } from "@/lib/llmBackends";
 import type { ChatMessage, ChatSession, GitHubWorkspaceSettings, ModelSettings, UserAlgoPreset } from "@/types";
@@ -24,10 +24,12 @@ const TRADING_MODE_STORAGE_KEY = "unt_trading_mode_v1";
 const SELECTED_ALGO_KEY = "unt_selected_algo_v1";
 const CA_MINT_KEY = "unt_ca_mint_v1";
 const SCALPER_LIVE_BUY_SOL_KEY = "unt_scalper_live_buy_sol_v1";
+const PERSISTED_TRADES_KEY = "unt_persisted_bot_trades_v1";
 const SCALPER_LIVE_BUY_MIN = 0.001;
 const SCALPER_LIVE_BUY_MAX = 25;
 const MAX_STORED_MESSAGES = 120;
 const MAX_SESSIONS = 10;
+const MAX_PERSISTED_TRADES = 1000;
 
 export type TradingMode = "paper" | "real";
 
@@ -132,8 +134,28 @@ function loadGithubWorkspace(): GitHubWorkspaceSettings {
   }
 }
 
-export type ActivitySection = "analytics" | "models" | "code";
-export type SidebarMode = "analytics" | "models" | "code";
+export type ActivitySection = "analytics" | "models" | "code" | "performance" | "training";
+export type SidebarMode = "analytics" | "models" | "code" | "performance" | "training";
+
+/**
+ * A closed bot trade that survives session resets and page reloads.
+ * Stores the wallet + mint at time of trade so records stay accurate even after
+ * the user switches wallets or tokens.
+ */
+export type PersistedBotTrade = (BotTradeRowChain | BotTradeRowTape) & {
+  walletPk: string;
+  mint: string;
+};
+
+function loadPersistedTrades(): PersistedBotTrade[] {
+  try {
+    const raw = localStorage.getItem(PERSISTED_TRADES_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as PersistedBotTrade[];
+  } catch {
+    return [];
+  }
+}
 
 /** Live chart + PumpPortal order-book stream signals for the Dashboard sidebar (chart panel). */
 /** Last closed candle as shown on chart (OHLC). Values are price USD or MC USD depending on axis mode. */
@@ -265,6 +287,12 @@ type AppState = {
   setTradingHalted: (v: boolean) => void;
   /** Emergency stop: halt live sends + end scalper session. */
   hardStopTrading: () => void;
+  /** All-time persisted bot trades (real + paper) across sessions and wallet changes. */
+  persistedBotTrades: PersistedBotTrade[];
+  /** Append new closed trades to the persistent log. Deduplicates by id. */
+  appendPersistedTrades: (trades: PersistedBotTrade[]) => void;
+  /** Wipe the persistent trade log. */
+  clearPersistedTrades: () => void;
   githubWorkspace: GitHubWorkspaceSettings;
   setGithubWorkspace: (patch: Partial<GitHubWorkspaceSettings>) => void;
   openFilePath: string | null;
@@ -306,6 +334,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [tradingMode, setTradingModeState] = useState<TradingMode>(loadTradingMode);
   const [algoSessionActive, setAlgoSessionActive] = useState(false);
   const [tradingHalted, setTradingHalted] = useState(false);
+  const [persistedBotTrades, setPersistedBotTrades] = useState<PersistedBotTrade[]>(loadPersistedTrades);
   const [githubWorkspace, setGithubWorkspaceState] = useState(loadGithubWorkspace);
   const [openFilePath, setOpenFilePath] = useState<string | null>(null);
   const [openFileContent, setOpenFileContent] = useState<string | null>(null);
@@ -356,6 +385,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     lsSave(GITHUB_WORKSPACE_KEY, JSON.stringify(githubWorkspace));
   }, [githubWorkspace]);
+
+  useEffect(() => {
+    lsSave(PERSISTED_TRADES_KEY, JSON.stringify(persistedBotTrades));
+  }, [persistedBotTrades]);
 
   // ── Session helpers ───────────────────────────────────────────────
   const updateSessions = useCallback(
@@ -544,6 +577,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setAlgoSessionActive(false);
   }, []);
 
+  const appendPersistedTrades = useCallback((trades: PersistedBotTrade[]) => {
+    if (trades.length === 0) return;
+    setPersistedBotTrades((prev) => {
+      const existingIds = new Set(prev.map((t) => t.id));
+      const fresh = trades.filter((t) => !existingIds.has(t.id));
+      if (fresh.length === 0) return prev;
+      const next = [...prev, ...fresh];
+      // Drop oldest if over cap
+      return next.length > MAX_PERSISTED_TRADES ? next.slice(next.length - MAX_PERSISTED_TRADES) : next;
+    });
+  }, []);
+
+  const clearPersistedTrades = useCallback(() => {
+    setPersistedBotTrades([]);
+  }, []);
+
   const setChartAnalytics = useCallback((patch: Partial<ChartAnalyticsState>) => {
     setChartAnalyticsState((prev) => ({ ...prev, ...patch }));
   }, []);
@@ -610,6 +659,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       tradingHalted,
       setTradingHalted,
       hardStopTrading,
+      persistedBotTrades,
+      appendPersistedTrades,
+      clearPersistedTrades,
       githubWorkspace,
       setGithubWorkspace,
       openFilePath,
@@ -631,6 +683,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       sidebarMode, sidebarOpen, activitySection,
       userAlgos, addUserAlgo, removeUserAlgo, selectedAlgoId,
       caMintInput, scalperLiveBuySol, tradingMode, algoSessionActive, tradingHalted,
+      persistedBotTrades, appendPersistedTrades, clearPersistedTrades,
       githubWorkspace, setGithubWorkspace,
       openFilePath, openFileContent, setOpenFile,
       workspaceFilePaths, setWorkspaceFilePaths,

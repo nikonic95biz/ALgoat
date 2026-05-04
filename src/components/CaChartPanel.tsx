@@ -235,6 +235,7 @@ export function CaChartPanel() {
     setTradingHalted,
     hardStopTrading,
     scalperLiveBuySol,
+    appendPersistedTrades,
   } = useApp();
 
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -383,7 +384,8 @@ export function CaChartPanel() {
     if (tradingMode === "real") {
       setLivePumpPortalSig(null);
       setLivePumpPortalErr(null);
-      setLiveChainTrades([]);
+      // Reset pending buy ref so a stale buy sig from the previous session
+      // can't be paired with a sell from a new session.
       pendingLiveBuySigRef.current = null;
     }
   }, [algoSessionActive, selectedAlgoId, mintLoaded, tradingMode]);
@@ -392,14 +394,12 @@ export function CaChartPanel() {
     if (tradingMode !== "real") {
       setLivePumpPortalSig(null);
       setLivePumpPortalErr(null);
-      setLiveChainTrades([]);
       pendingLiveBuySigRef.current = null;
     }
   }, [tradingMode]);
 
   useEffect(() => {
     if (tradingMode !== "real") return;
-    setLiveChainTrades([]);
     pendingLiveBuySigRef.current = null;
   }, [mintLoaded, tradingMode]);
 
@@ -414,6 +414,24 @@ export function CaChartPanel() {
   const prevLiveOpenRef = useRef<boolean | undefined>(undefined);
   const lastLiveTxAtRef = useRef(0);
   const pendingLiveBuySigRef = useRef<string | null>(null);
+  const lastPersistedPaperCountRef = useRef(0);
+
+  // Persist newly closed paper trades as they accumulate in the session.
+  useEffect(() => {
+    if (!paperScalper || !mintLoaded) return;
+    const all = paperScalper.botTrades;
+    const newCount = all.length;
+    if (newCount <= lastPersistedPaperCountRef.current) return;
+    const fresh = all.slice(lastPersistedPaperCountRef.current);
+    lastPersistedPaperCountRef.current = newCount;
+    const walletPk = getPumpPortalTradingWalletPubkey() ?? "paper";
+    appendPersistedTrades(fresh.map((t) => ({ ...t, walletPk, mint: mintLoaded })));
+  }, [paperScalper, mintLoaded, appendPersistedTrades]);
+
+  // Reset paper persist counter when a new session starts or mint changes.
+  useEffect(() => {
+    lastPersistedPaperCountRef.current = 0;
+  }, [scalperCutoffMs, mintLoaded]);
 
   useEffect(() => {
     if (tradingMode !== "real" || !algoSessionActive || tradingHalted) {
@@ -533,21 +551,24 @@ export function CaChartPanel() {
         const roiPct = solSpent > 0 ? (netSol / solSpent) * 100 : 0;
 
         setLivePumpPortalErr(null);
-        setLiveChainTrades((prev) => [
-          ...prev,
-          {
-            kind: "chain",
-            id: `chain-${res.signature}`,
-            closedAtTs: Date.now(),
-            exitReason,
-            buySignature: buySig,
-            sellSignature: res.signature,
-            solSpent,
-            solReceived,
-            netSol,
-            roiPct,
-          },
-        ]);
+        const chainTrade: BotTradeRowChain = {
+          kind: "chain",
+          id: `chain-${res.signature}`,
+          closedAtTs: Date.now(),
+          exitReason,
+          buySignature: buySig,
+          sellSignature: res.signature,
+          solSpent,
+          solReceived,
+          netSol,
+          roiPct,
+        };
+        setLiveChainTrades((prev) => [...prev, chainTrade]);
+        appendPersistedTrades([{
+          ...chainTrade,
+          walletPk: walletPk,
+          mint: mintLoaded,
+        }]);
       })();
       return;
     }

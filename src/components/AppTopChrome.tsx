@@ -101,6 +101,28 @@ export function AppTopChrome() {
               }}
             />
           </Tooltip>
+          <Tooltip text="All-time trading history and stats across every session and wallet" side="bottom" delay={500}>
+            <NavTab
+              label="Performance"
+              active={activitySection === "performance"}
+              onClick={() => {
+                setActivitySection("performance");
+                setSidebarMode("performance");
+                setSidebarOpen(true);
+              }}
+            />
+          </Tooltip>
+          <Tooltip text="Training data — coming soon" side="bottom" delay={500}>
+            <NavTab
+              label="Training data"
+              active={activitySection === "training"}
+              onClick={() => {
+                setActivitySection("training");
+                setSidebarMode("training");
+                setSidebarOpen(true);
+              }}
+            />
+          </Tooltip>
         </div>
 
         <div

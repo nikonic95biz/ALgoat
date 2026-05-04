@@ -20,6 +20,8 @@ import {
 } from "@/lib/scalperPaperEngine";
 import { SetupPanel } from "@/components/SetupPanel";
 import { WorkspacePanel } from "@/components/WorkspacePanel";
+import { PerformancePanel } from "@/components/PerformancePanel";
+import { TrainingDataPanel } from "@/components/TrainingDataPanel";
 import { usePumpPortalConfigRevision } from "@/hooks/usePumpPortalConfigRevision";
 
 /** Empty BotTradesBook copy follows engine phase — exit wording only once you're in a trade. */
@@ -47,6 +49,8 @@ export function DashboardSidebar() {
   const { sidebarMode } = useApp();
   if (sidebarMode === "analytics") return <AnalyticsPanel />;
   if (sidebarMode === "code") return <WorkspacePanel />;
+  if (sidebarMode === "performance") return <div className="p-4"><PerformancePanel /></div>;
+  if (sidebarMode === "training") return <div className="p-4"><TrainingDataPanel /></div>;
   return <SetupPanel />;
 }
 
