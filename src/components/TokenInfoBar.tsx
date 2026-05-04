@@ -49,18 +49,11 @@ export function TokenInfoBar({ mint }: { mint: string | null }) {
         <span className="ml-1 font-normal text-[var(--color-fg-dim)]">{meta.symbol}</span>
       </span>
 
-      {/* Bonded badge */}
-      {meta.bonded && (
-        <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400/90">
-          bonded
-        </span>
-      )}
-
       {/* Stats */}
       {meta.liquidityUsd != null && (
         <Stat label="liq" value={fmt(meta.liquidityUsd, { prefix: "$" }) ?? ""} />
       )}
-      {meta.pumpMcUsd != null && !meta.bonded && (
+      {meta.pumpMcUsd != null && (
         <Stat label="mc" value={fmt(meta.pumpMcUsd, { prefix: "$" }) ?? ""} />
       )}
       {meta.volumeUsd24h != null && (
