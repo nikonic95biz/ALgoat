@@ -53,6 +53,7 @@ import {
   type WorkflowRunStatus,
 } from "@/lib/githubApi";
 import type { ChatMessage, ModelSettings } from "@/types";
+import { ChatEmptyState } from "@/components/_ChatEmptyState";
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1240,23 +1241,13 @@ export function ChatPanel() {
       >
         <StandaloneAssistantIntro messages={leadingAssistants} copiedId={copiedId} onCopy={copyMessage} />
         {leadingAssistants.length === 0 && turns.length === 0 ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 py-10 text-center">
-            <p className="text-[13px] font-medium text-[var(--color-fg-muted)]">Algo assistant</p>
-            {showMissingKeyBanner ? (
-              <p className="max-w-[220px] text-[12px] text-[var(--color-fg-dim)] leading-relaxed">
-                Add an LLM key in{" "}
-                <button type="button" className="underline underline-offset-2 hover:text-[var(--color-fg-muted)]" onClick={openSetupForLlm}>
-                  Setup
-                </button>{" "}
-                to start chatting.
-                <br />Supports Anthropic, OpenAI, OpenRouter, and Ollama.
-              </p>
-            ) : (
-              <p className="max-w-[220px] text-[12px] text-[var(--color-fg-dim)] leading-relaxed">
-                Ask anything about the chart, token, or your algo — or request code changes and apply them directly.
-              </p>
-            )}
-          </div>
+          <ChatEmptyState
+            showMissingKeyBanner={showMissingKeyBanner}
+            localWorkspaceConnected={localWorkspaceHandle !== null}
+            githubWired={Boolean(githubWorkspace.owner && githubWorkspace.repo)}
+            onOpenSetup={openSetupForLlm}
+            onSend={(text) => void send(text)}
+          />
         ) : null}
         {turns.map((turn, idx) => (
           <ChatTurnSection
