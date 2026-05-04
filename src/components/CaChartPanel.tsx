@@ -1246,8 +1246,10 @@ export function CaChartPanel() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chartRows]);
 
-  // Prefetch 3 × 1000 candles at the **same interval as the chart** for bounce detection.
-  // Detection fires automatically once rows are ready (no button click needed).
+  // Prefetch 1s candles for bounce detection — always 1s regardless of chart interval,
+  // so the ZigZag algo and vision API always see maximum granularity.
+  // Only re-fetches when the mint changes, NOT on interval switches — no reason to
+  // redo a 10-page 1s fetch just because the user toggled from 5s to 1m.
   useEffect(() => {
     if (!mintLoaded) {
       setFloorDetectionRows([]);
@@ -1259,9 +1261,7 @@ export function CaChartPanel() {
     setFloorCandlesStatus("loading");
     void (async () => {
       try {
-        // Fetch 1s candles for floor detection — most granular view for
-        // ZigZag algo + vision API. Use the in-memory cache if it's warm
-        // (chart initial load already fetched these), else paginate fresh.
+        // Use the in-memory cache if the chart initial load already fetched 1s bars.
         // 10 pages × 1000 bars = 10,000 × 1 s ≈ 2.8 h of price history.
         const cached1s = getCachedCandles(mintLoaded, "1s");
         const { candles } = cached1s ?? await fetchPumpCandlesPaged(mintLoaded, {
@@ -1273,11 +1273,13 @@ export function CaChartPanel() {
         setFloorCandlesStatus("ready");
       } catch {
         if (gen !== floorFetchGenRef.current) return;
-        setFloorCandlesStatus("ready"); // let user try anyway; detection handles empty rows
+        setFloorCandlesStatus("ready");
       }
     })();
+  // chartInterval intentionally omitted — floor data is always 1s and switching
+  // the chart's display interval must NOT trigger a redundant 10-page 1s re-fetch.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mintLoaded, chartInterval]);
+  }, [mintLoaded]);
 
   // Track the last manual-refresh tick so we can distinguish user clicks from
   // effect re-runs triggered by candle updates.
@@ -1339,8 +1341,10 @@ export function CaChartPanel() {
         });
       }
     });
+  // chartInterval intentionally omitted — floor rows are always 1s so interval
+  // changes carry no new information for the detector.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [floorDetectionRows, mintLoaded, bounceSuggestionTick, chartInterval, setDetectedZones]);
+  }, [floorDetectionRows, mintLoaded, bounceSuggestionTick, setDetectedZones]);
 
   // Draw bounce zone price lines on the chart — fires when zones are (re)computed or mint changes.
   useEffect(() => {
