@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, Code2, GitBranch, Lock } from "lucide-react";
+import { LandingPageBackground } from "@/components/LandingBackground";
 
 type LandingPageProps = {
   homeHref: string;
   workspaceHref: string;
+  changelogHref: string;
   onOpenWorkspace: () => void;
 };
 
@@ -12,7 +14,7 @@ const GH =
     ? import.meta.env.VITE_GITHUB_REPO_URL.trim()
     : "";
 
-export function LandingPage({ homeHref, workspaceHref, onOpenWorkspace }: LandingPageProps) {
+export function LandingPage({ homeHref, workspaceHref, changelogHref, onOpenWorkspace }: LandingPageProps) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onOpenWorkspace();
@@ -23,20 +25,28 @@ export function LandingPage({ homeHref, workspaceHref, onOpenWorkspace }: Landin
 
   return (
     <div className="relative min-h-[100dvh] overflow-x-hidden bg-[#070708] font-sans text-[#c4c9d2] antialiased">
-      <PageBackground />
-      <NavBar homeHref={homeHref} onOpenWorkspace={onOpenWorkspace} />
+      <LandingPageBackground />
+      <NavBar homeHref={homeHref} changelogHref={changelogHref} onOpenWorkspace={onOpenWorkspace} />
       <Hero onOpenWorkspace={onOpenWorkspace} />
       <PurposeSection />
       <StarterStrategies />
       <PrivacySection workspaceHref={workspaceHref} />
-      <Footer onOpenWorkspace={onOpenWorkspace} />
+      <Footer changelogHref={changelogHref} onOpenWorkspace={onOpenWorkspace} />
     </div>
   );
 }
 
 // ── Nav ───────────────────────────────────────────────────────────────────────
 
-function NavBar({ homeHref, onOpenWorkspace }: { homeHref: string; onOpenWorkspace: () => void }) {
+function NavBar({
+  homeHref,
+  changelogHref,
+  onOpenWorkspace,
+}: {
+  homeHref: string;
+  changelogHref: string;
+  onOpenWorkspace: () => void;
+}) {
   return (
     <header className="relative z-20 border-b border-white/[0.05] bg-[#070708]/70 backdrop-blur-md">
       <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-5 py-3.5 sm:px-8">
@@ -49,6 +59,12 @@ function NavBar({ homeHref, onOpenWorkspace }: { homeHref: string; onOpenWorkspa
           <span className="text-[15px] font-semibold">SolClaw</span>
         </a>
         <div className="flex items-center gap-2">
+          <a
+            href={changelogHref}
+            className="hidden rounded-lg px-3 py-2 text-[13px] font-medium text-[#9aa4b2] transition-colors hover:text-[#eceff4] sm:inline-flex"
+          >
+            Release notes
+          </a>
           <button
             type="button"
             onClick={onOpenWorkspace}
@@ -329,7 +345,13 @@ $ npm run dev
 
 // ── Footer ────────────────────────────────────────────────────────────────────
 
-function Footer({ onOpenWorkspace }: { onOpenWorkspace: () => void }) {
+function Footer({
+  changelogHref,
+  onOpenWorkspace,
+}: {
+  changelogHref: string;
+  onOpenWorkspace: () => void;
+}) {
   return (
     <footer className="relative z-10 border-t border-white/[0.05]">
       <div className="mx-auto max-w-5xl px-5 py-16 sm:px-8 sm:py-20">
@@ -362,9 +384,16 @@ function Footer({ onOpenWorkspace }: { onOpenWorkspace: () => void }) {
           </div>
         </div>
 
-        <div className="mt-10 flex flex-col items-center justify-between gap-3 text-[12px] text-[#3a4050] sm:flex-row">
-          <p className="flex items-center gap-1.5"><img src="/solclaw-logo.png" alt="" className="h-3.5 w-3.5 object-contain" /> SolClaw · Open source · MIT · Nothing here is financial advice.</p>
-          <p className="font-mono">v0.1</p>
+        <div className="mt-10 flex flex-col items-center justify-between gap-4 text-[12px] text-[#3a4050] sm:flex-row">
+          <p className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
+            <span className="flex items-center gap-1.5">
+              <img src="/solclaw-logo.png" alt="" className="h-3.5 w-3.5 object-contain" /> SolClaw · Open source · MIT · Nothing here is financial advice.
+            </span>
+            <a href={changelogHref} className="font-mono text-[#2EA8FF]/80 underline-offset-2 hover:text-[#2EA8FF] hover:underline">
+              Release notes (v1.1)
+            </a>
+          </p>
+          <p className="font-mono tabular-nums">v1.1</p>
         </div>
       </div>
     </footer>
@@ -534,27 +563,3 @@ function buildSparklineTicks(): number[] {
   return out;
 }
 
-function PageBackground() {
-  return (
-    <>
-      <div
-        className="pointer-events-none fixed inset-0 -z-10"
-        aria-hidden
-        style={{
-          background:
-            "radial-gradient(ellipse 120% 70% at 50% -5%, rgba(46,168,255,0.13), transparent 55%), radial-gradient(ellipse 50% 40% at 90% 20%, rgba(46,168,255,0.05), transparent 55%)",
-        }}
-      />
-      <div
-        className="pointer-events-none fixed inset-0 -z-10 opacity-[0.018]"
-        aria-hidden
-        style={{
-          backgroundImage: `linear-gradient(rgba(255,255,255,0.7) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.7) 1px, transparent 1px)`,
-          backgroundSize: "72px 72px",
-          maskImage: "radial-gradient(ellipse 80% 60% at 50% 30%, rgba(0,0,0,0.9), transparent 80%)",
-          WebkitMaskImage: "radial-gradient(ellipse 80% 60% at 50% 30%, rgba(0,0,0,0.9), transparent 80%)",
-        }}
-      />
-    </>
-  );
-}

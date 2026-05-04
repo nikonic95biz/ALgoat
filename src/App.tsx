@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { LandingPage } from "@/components/LandingPage";
 import { TradingWorkspace } from "@/components/TradingWorkspace";
 import { AppProvider } from "@/context/AppContext";
-import { homePath, isWorkspacePath, workspacePath } from "@/lib/siteUrls";
+import { ReleaseNotesPage } from "@/components/ReleaseNotesPage";
+import { changelogPath, homePath, isChangelogPath, isWorkspacePath, workspacePath } from "@/lib/siteUrls";
 
 function isLocalhost(): boolean {
   if (typeof window === "undefined") return false;
@@ -42,7 +43,23 @@ export default function App() {
     );
   }
 
+  if (isChangelogPath(pathname)) {
+    return (
+      <ReleaseNotesPage
+        homeHref={homePath()}
+        workspaceHref={workspacePath()}
+        changelogHref={changelogPath()}
+        onOpenWorkspace={openWorkspace}
+      />
+    );
+  }
+
   return (
-    <LandingPage homeHref={homePath()} workspaceHref={workspacePath()} onOpenWorkspace={openWorkspace} />
+    <LandingPage
+      homeHref={homePath()}
+      workspaceHref={workspacePath()}
+      changelogHref={changelogPath()}
+      onOpenWorkspace={openWorkspace}
+    />
   );
 }

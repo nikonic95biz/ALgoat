@@ -30,7 +30,7 @@ npm run bundle-workspace   # optional — regenerate public/bundled-workspace/ o
 
 | Area | Primary paths | Notes |
 |------|--------------|-------|
-| App shell | `src/App.tsx`, `src/components/AppShell.tsx`, `src/components/AppTopChrome.tsx` | Top chrome + horizontal nav + resizable panels |
+| App shell | `src/App.tsx`, `src/components/AppShell.tsx`, `src/components/AppTopChrome.tsx` | Top chrome + horizontal nav + resizable panels; `App.tsx` routes `/app` workspace, `/changelog` release notes (see `siteUrls.ts`), marketing landing otherwise |
 | Top chrome | `src/components/AppTopChrome.tsx`, `src/hooks/useSetupProgress.ts` | Horizontal text nav + setup chip — add nav tabs when adding sidebar modes |
 | Global state | `src/context/AppContext.tsx` | Single React context, localStorage-backed |
 | Sidebar switcher | `src/components/DashboardSidebar.tsx` | Routes `sidebarMode` → panel component |

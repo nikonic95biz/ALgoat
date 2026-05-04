@@ -2,6 +2,8 @@
 
 ## v1.1 — 2026-05-04
 
+**Public route:** engineering changelog is browseable at **`{BASE_PATH}/changelog`** (production example: [enrich.fun/solclaw/changelog](https://enrich.fun/solclaw/changelog)). Implementation: `ReleaseNotesPage.tsx`, routing in `App.tsx`, `changelogPath()` in `siteUrls.ts`.
+
 ### Bounce Zone Engine
 
 - **Algo detection auto-fires on first chart load** (zero API cost). Vision detection (LLM) is now strictly manual-only — clicking "Refresh bounce lines" is the only thing that triggers an API call, so users never burn credits without consent.

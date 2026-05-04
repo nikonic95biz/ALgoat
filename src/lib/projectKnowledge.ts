@@ -22,7 +22,7 @@ On localhost (\`npm run dev\` or \`vite preview\`), LLM and GitHub API calls go 
 ## File layout (src/)
 | Area | Path | Role |
 |------|------|------|
-| Shell | \`App.tsx\`, \`components/AppShell.tsx\`, \`components/AppTopChrome.tsx\`, \`components/LandingPage.tsx\`, \`components/TradingWorkspace.tsx\` | \`/\` = marketing one-pager; full IDE at \`/app\` (respects \`VITE_BASE_PATH\`) |
+| Shell | \`App.tsx\`, \`components/AppShell.tsx\`, \`components/AppTopChrome.tsx\`, \`components/LandingPage.tsx\`, \`components/ReleaseNotesPage.tsx\`, \`components/LandingBackground.tsx\`, \`components/TradingWorkspace.tsx\`, \`lib/siteUrls.ts\` | Marketing root \`/\` (or base path); **engineering changelog** at \`/changelog\` (e.g. \`/solclaw/changelog\` on enrich.fun); full IDE at \`/app\` (respects \`VITE_BASE_PATH\`). Localhost skips landing unless URL is \`/changelog\`. |
 | Global state | \`context/AppContext.tsx\` | All state (model, chat, GitHub workspace, chart analytics, …) |
 | Top chrome | \`components/AppTopChrome.tsx\`, \`hooks/useSetupProgress.ts\`, \`lib/setupProgress.ts\` | Text nav (Dashboard, Setup, Code); setup progress X/4; red banner when incomplete |
 | Sidebar switcher | \`components/DashboardSidebar.tsx\` | Routes \`sidebarMode\` → Dashboard, Setup, Code, **Nursery** panels |
