@@ -6,7 +6,7 @@ type LandingPageProps = {
   homeHref: string;
   workspaceHref: string;
   changelogHref: string;
-  onOpenWorkspace: () => void;
+  onOpenWorkspace?: () => void;
 };
 
 const GH =
@@ -14,24 +14,16 @@ const GH =
     ? import.meta.env.VITE_GITHUB_REPO_URL.trim()
     : "";
 
-export function LandingPage({ homeHref, workspaceHref, changelogHref, onOpenWorkspace }: LandingPageProps) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onOpenWorkspace();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onOpenWorkspace]);
-
+export function LandingPage({ homeHref, workspaceHref, changelogHref }: LandingPageProps) {
   return (
     <div className="relative min-h-[100dvh] overflow-x-hidden bg-[#070708] font-sans text-[#c4c9d2] antialiased">
       <LandingPageBackground />
-      <NavBar homeHref={homeHref} changelogHref={changelogHref} onOpenWorkspace={onOpenWorkspace} />
-      <Hero onOpenWorkspace={onOpenWorkspace} />
+      <NavBar homeHref={homeHref} changelogHref={changelogHref} />
+      <Hero />
       <PurposeSection />
       <StarterStrategies />
       <PrivacySection workspaceHref={workspaceHref} />
-      <Footer changelogHref={changelogHref} onOpenWorkspace={onOpenWorkspace} />
+      <Footer changelogHref={changelogHref} />
     </div>
   );
 }
@@ -41,11 +33,9 @@ export function LandingPage({ homeHref, workspaceHref, changelogHref, onOpenWork
 function NavBar({
   homeHref,
   changelogHref,
-  onOpenWorkspace,
 }: {
   homeHref: string;
   changelogHref: string;
-  onOpenWorkspace: () => void;
 }) {
   return (
     <header className="relative z-20 border-b border-white/[0.05] bg-[#070708]/70 backdrop-blur-md">
@@ -65,13 +55,6 @@ function NavBar({
           >
             Release notes
           </a>
-          <button
-            type="button"
-            onClick={onOpenWorkspace}
-            className="hidden rounded-lg border border-white/[0.1] px-3 py-2 text-[13px] font-medium text-[#9aa4b2] transition-colors hover:border-white/[0.2] hover:text-[#eceff4] sm:inline-flex"
-          >
-            Demo
-          </button>
           <a
             href={GH || "https://github.com/Enrichfun/solclaw"}
             target="_blank"
@@ -89,7 +72,7 @@ function NavBar({
 
 // ── Hero ──────────────────────────────────────────────────────────────────────
 
-function Hero({ onOpenWorkspace }: { onOpenWorkspace: () => void }) {
+function Hero() {
   return (
     <section className="relative z-10 mx-auto max-w-5xl px-5 pb-16 pt-20 sm:px-8 sm:pb-24 sm:pt-32">
       <div className="grid items-center gap-14 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
@@ -120,14 +103,6 @@ function Hero({ onOpenWorkspace }: { onOpenWorkspace: () => void }) {
               <GitBranch className="h-4 w-4" strokeWidth={2.6} />
               Fork on GitHub
             </a>
-            <button
-              type="button"
-              onClick={onOpenWorkspace}
-              className="group inline-flex items-center gap-2 rounded-xl border border-white/[0.12] bg-white/[0.02] px-6 py-3.5 text-[15px] font-medium text-[#dce1ea] transition-colors hover:border-[#2EA8FF]/35 hover:text-[#2EA8FF]"
-            >
-              <Code2 className="h-4 w-4" strokeWidth={2.2} />
-              Try the demo
-            </button>
           </div>
 
           <div className="mt-10 grid grid-cols-3 gap-5 border-t border-white/[0.06] pt-8 max-w-sm">
@@ -347,10 +322,8 @@ $ npm run dev
 
 function Footer({
   changelogHref,
-  onOpenWorkspace,
 }: {
   changelogHref: string;
-  onOpenWorkspace: () => void;
 }) {
   return (
     <footer className="relative z-10 border-t border-white/[0.05]">
@@ -373,14 +346,6 @@ function Footer({
               <GitBranch className="h-4 w-4" strokeWidth={2.6} />
               Fork on GitHub
             </a>
-            <button
-              type="button"
-              onClick={onOpenWorkspace}
-              className="group inline-flex items-center gap-2 rounded-xl border border-white/[0.12] bg-white/[0.02] px-6 py-3.5 text-[15px] font-medium text-[#dce1ea] transition-colors hover:border-[#2EA8FF]/35 hover:text-[#2EA8FF]"
-            >
-              Try demo
-              <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" strokeWidth={2.2} />
-            </button>
           </div>
         </div>
 
