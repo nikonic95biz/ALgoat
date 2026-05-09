@@ -12,6 +12,8 @@
     { "source": "/", "destination": "/solclaw", "permanent": false }
   ],
   "rewrites": [
+    { "source": "/aurapoints", "destination": "https://aurapoints.vercel.app/index.html" },
+    { "source": "/aurapoints/(.*)", "destination": "https://aurapoints.vercel.app/$1" },
     { "source": "/pump-api/:path*", "destination": "https://swap-api.pump.fun/:path*" },
     { "source": "/pump-frontend/:path*", "destination": "https://frontend-api.pump.fun/:path*" },
     { "source": "/dex-api/:path*", "destination": "https://api.dexscreener.com/:path*" },
