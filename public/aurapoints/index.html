@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AURAPOINTS — Raid to Earn</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg:          #09090b;
+      --surface:     #111113;
+      --card:        #18181b;
+      --card-hover:  #1e1e22;
+      --border:      rgba(255,255,255,0.07);
+      --border-hi:   rgba(255,255,255,0.12);
+      --text:        #fafafa;
+      --muted:       #a1a1aa;
+      --dim:         #52526a;
+      --green:       #22c55e;
+      --green-dim:   rgba(34,197,94,0.1);
+      --green-glow:  rgba(34,197,94,0.3);
+      --violet:      #a78bfa;
+      --violet-dim:  rgba(167,139,250,0.1);
+      --twitter:     #1d9bf0;
+      --twitter-dim: rgba(29,155,240,0.12);
+      --amber:       #f59e0b;
+      --font:        "Plus Jakarta Sans", system-ui, sans-serif;
+      --mono:        "IBM Plex Mono", ui-monospace, monospace;
+      --r:           14px;
+      --r-lg:        20px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { height: 100%; }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* atmosphere */
+    .atm {
+      position: fixed; inset: 0; z-index: 0; pointer-events: none;
+      background:
+        radial-gradient(ellipse 70% 45% at 50% -10%, rgba(34,197,94,0.08) 0%, transparent 55%),
+        radial-gradient(ellipse 50% 35% at 100% 50%, rgba(167,139,250,0.06) 0%, transparent 50%);
+    }
+
+    .app { position: relative; z-index: 1; min-height: 100vh; display: flex; flex-direction: column; }
+
+    /* ── NAV ── */
+    nav {
+      position: sticky; top: 0; z-index: 50;
+      display: flex; align-items: center; justify-content: space-between; gap: 16px;
+      padding: 13px 22px;
+      background: rgba(9,9,11,0.88);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+    }
+
+    .nav-brand {
+      display: flex; align-items: center; gap: 11px; text-decoration: none; color: inherit;
+    }
+    .nav-logo {
+      width: 34px; height: 34px; border-radius: 10px;
+      background: linear-gradient(135deg, var(--green), var(--violet));
+      display: grid; place-items: center;
+      font-family: var(--mono); font-size: 12px; font-weight: 600; color: #050a05;
+      box-shadow: 0 0 20px rgba(34,197,94,0.18);
+      flex-shrink: 0;
+    }
+    .nav-name { font-weight: 800; font-size: 15px; letter-spacing: -0.02em; }
+    .nav-tag  { font-family: var(--mono); font-size: 10px; color: var(--dim); display: block; margin-top: 1px; }
+
+    .nav-right { display: flex; align-items: center; gap: 10px; }
+
+    /* aura pill */
+    .aura-pill {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-family: var(--mono); font-size: 12px; font-weight: 600;
+      padding: 8px 14px; border-radius: 999px;
+      border: 1px solid rgba(34,197,94,0.25);
+      background: var(--green-dim); color: var(--green);
+      cursor: default; user-select: none;
+    }
+    .aura-pill svg { width: 13px; height: 13px; }
+
+    /* claim button */
+    .btn-claim-nav {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-family: var(--font); font-size: 13px; font-weight: 700;
+      padding: 9px 18px; border-radius: 10px;
+      border: 1px solid rgba(167,139,250,0.3);
+      background: var(--violet-dim); color: var(--violet);
+      cursor: pointer; transition: background 0.15s, box-shadow 0.15s;
+    }
+    .btn-claim-nav:hover { background: rgba(167,139,250,0.18); box-shadow: 0 0 20px rgba(167,139,250,0.12); }
+    .btn-claim-nav svg { width: 15px; height: 15px; }
+
+    /* user chip */
+    .user-chip {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 12px 6px 6px; border-radius: 999px;
+      border: 1px solid var(--border); background: rgba(255,255,255,0.04);
+      font-size: 13px; font-weight: 600;
+    }
+    .user-avatar {
+      width: 26px; height: 26px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--twitter), var(--violet));
+      display: grid; place-items: center;
+      font-size: 11px; font-weight: 700; color: #fff;
+      flex-shrink: 0;
+    }
+    .user-avatar img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
+
+    /* ── SPLASH (pre-login) ── */
+    .splash {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      text-align: center; padding: 40px 20px;
+      gap: 0;
+    }
+    .splash-icon {
+      width: 72px; height: 72px; border-radius: 22px;
+      background: linear-gradient(135deg, var(--green), var(--violet));
+      display: grid; place-items: center; margin: 0 auto 24px;
+      box-shadow: 0 0 60px rgba(34,197,94,0.2);
+    }
+    .splash-icon svg { width: 36px; height: 36px; color: #050a05; }
+    .splash h1 {
+      font-size: clamp(2rem,5vw,3rem); font-weight: 800; letter-spacing: -0.04em;
+      line-height: 1.05; margin-bottom: 14px;
+    }
+    .splash h1 em { font-style: normal; color: var(--green); }
+    .splash p {
+      font-size: 16px; color: var(--muted); max-width: 440px;
+      margin: 0 auto 32px; line-height: 1.65;
+    }
+
+    .btn-connect-x {
+      display: inline-flex; align-items: center; gap: 10px;
+      font-family: var(--font); font-size: 15px; font-weight: 700;
+      padding: 14px 28px; border-radius: 12px; border: none;
+      background: var(--text); color: #09090b;
+      cursor: pointer; transition: opacity 0.15s, box-shadow 0.15s;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+    }
+    .btn-connect-x:hover { opacity: 0.88; }
+    .btn-connect-x svg { width: 18px; height: 18px; }
+
+    .splash-note {
+      margin-top: 18px; font-size: 12px; color: var(--dim); max-width: 340px; line-height: 1.55;
+    }
+    .splash-note a { color: var(--muted); }
+
+    /* how it works pills */
+    .how-row {
+      display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-top: 36px;
+    }
+    .how-pill {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 13px; font-weight: 600;
+      padding: 10px 16px; border-radius: 999px;
+      border: 1px solid var(--border); background: rgba(255,255,255,0.03);
+      color: var(--muted);
+    }
+    .how-pill span.n {
+      width: 20px; height: 20px; border-radius: 50%;
+      background: var(--green-dim); color: var(--green);
+      display: grid; place-items: center;
+      font-family: var(--mono); font-size: 11px; font-weight: 600;
+    }
+
+    /* ── FEED ── */
+    .feed-layout {
+      max-width: 680px; width: 100%; margin: 0 auto; padding: 24px 16px 60px;
+    }
+
+    .feed-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 20px; gap: 12px;
+    }
+    .feed-header h2 {
+      font-size: 18px; font-weight: 800; letter-spacing: -0.02em;
+    }
+    .feed-header-sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+
+    .rate-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-family: var(--mono); font-size: 11px; font-weight: 500;
+      padding: 7px 12px; border-radius: 8px;
+      border: 1px solid rgba(34,197,94,0.2); background: var(--green-dim);
+      color: var(--green); white-space: nowrap;
+    }
+
+    /* tweet card */
+    .tweet-card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: var(--r-lg); margin-bottom: 14px;
+      overflow: hidden; transition: border-color 0.15s;
+    }
+    .tweet-card:hover { border-color: var(--border-hi); }
+
+    .tweet-body { padding: 18px 20px 14px; }
+
+    .tweet-author {
+      display: flex; align-items: center; gap: 11px; margin-bottom: 12px;
+    }
+    .tweet-avatar {
+      width: 42px; height: 42px; border-radius: 50%; flex-shrink: 0;
+      background: linear-gradient(135deg, #1d9bf0, #7c3aed);
+      display: grid; place-items: center;
+      font-weight: 800; font-size: 16px; color: #fff;
+    }
+    .tweet-author-info { flex: 1; min-width: 0; }
+    .tweet-name { font-weight: 700; font-size: 15px; }
+    .tweet-handle {
+      font-size: 13px; color: var(--muted);
+      display: flex; align-items: center; gap: 6px;
+    }
+    .tweet-verified {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 16px; height: 16px; background: var(--twitter); border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .tweet-verified svg { width: 10px; height: 10px; color: #fff; }
+    .tweet-time { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+
+    .tweet-text {
+      font-size: 15px; line-height: 1.6; color: var(--text);
+      margin-bottom: 14px; white-space: pre-wrap; word-break: break-word;
+    }
+    .tweet-text a { color: var(--twitter); text-decoration: none; }
+    .tweet-text a:hover { text-decoration: underline; }
+
+    /* tweet media placeholder */
+    .tweet-media {
+      border-radius: 12px; overflow: hidden; margin-bottom: 14px;
+      background: rgba(255,255,255,0.04); border: 1px solid var(--border);
+      aspect-ratio: 16/9; display: grid; place-items: center;
+    }
+    .tweet-media svg { width: 40px; height: 40px; color: var(--dim); }
+
+    .tweet-stats {
+      display: flex; gap: 18px; padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .tweet-stat {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 13px; color: var(--muted);
+    }
+    .tweet-stat svg { width: 15px; height: 15px; }
+
+    /* raid bar */
+    .raid-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 20px; gap: 14px;
+      background: rgba(255,255,255,0.02);
+    }
+    .raid-count {
+      font-size: 13px; color: var(--muted);
+    }
+    .raid-count strong { color: var(--green); font-weight: 700; }
+
+    .raid-actions { display: flex; gap: 8px; }
+
+    .btn-raid {
+      display: inline-flex; align-items: center; gap: 7px;
+      font-family: var(--font); font-size: 13px; font-weight: 700;
+      padding: 9px 16px; border-radius: 10px; cursor: pointer;
+      transition: background 0.15s, box-shadow 0.15s, opacity 0.15s;
+      border: none;
+    }
+    .btn-raid.primary {
+      background: var(--twitter); color: #fff;
+    }
+    .btn-raid.primary:hover { opacity: 0.88; }
+    .btn-raid.primary svg { width: 15px; height: 15px; }
+
+    .btn-verify {
+      display: inline-flex; align-items: center; gap: 7px;
+      font-family: var(--font); font-size: 13px; font-weight: 700;
+      padding: 9px 16px; border-radius: 10px; cursor: pointer;
+      border: 1px solid rgba(34,197,94,0.3);
+      background: var(--green-dim); color: var(--green);
+      transition: background 0.15s;
+    }
+    .btn-verify:hover { background: rgba(34,197,94,0.18); }
+    .btn-verify svg { width: 15px; height: 15px; }
+    .btn-verify:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn-done {
+      display: inline-flex; align-items: center; gap: 7px;
+      font-family: var(--font); font-size: 13px; font-weight: 600;
+      padding: 9px 16px; border-radius: 10px;
+      border: 1px solid rgba(34,197,94,0.2);
+      background: rgba(34,197,94,0.06); color: var(--green);
+      cursor: default;
+    }
+    .btn-done svg { width: 14px; height: 14px; }
+
+    /* ── MODAL OVERLAY ── */
+    .overlay {
+      position: fixed; inset: 0; z-index: 200;
+      background: rgba(0,0,0,0.75); backdrop-filter: blur(8px);
+      display: grid; place-items: center; padding: 20px;
+      opacity: 0; pointer-events: none; transition: opacity 0.2s;
+    }
+    .overlay.open { opacity: 1; pointer-events: all; }
+
+    .modal {
+      background: var(--card); border: 1px solid var(--border-hi);
+      border-radius: var(--r-lg); width: 100%; max-width: 440px;
+      padding: 28px; position: relative;
+      transform: translateY(14px); transition: transform 0.2s;
+    }
+    .overlay.open .modal { transform: translateY(0); }
+
+    .modal-close {
+      position: absolute; top: 16px; right: 16px;
+      width: 30px; height: 30px; border-radius: 50%;
+      border: 1px solid var(--border); background: rgba(255,255,255,0.04);
+      color: var(--muted); cursor: pointer; display: grid; place-items: center;
+      transition: background 0.15s;
+    }
+    .modal-close:hover { background: rgba(255,255,255,0.08); }
+    .modal-close svg { width: 14px; height: 14px; }
+
+    .modal h3 { font-size: 20px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 6px; }
+    .modal p  { font-size: 14px; color: var(--muted); line-height: 1.55; margin-bottom: 20px; }
+
+    /* claim modal specifics */
+    .claim-bal-box {
+      background: rgba(255,255,255,0.03); border: 1px solid var(--border);
+      border-radius: 12px; padding: 18px; margin-bottom: 18px; text-align: center;
+    }
+    .claim-bal-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); margin-bottom: 8px; }
+    .claim-bal-num   { font-family: var(--mono); font-size: 2.4rem; font-weight: 600; color: var(--green); line-height: 1; }
+    .claim-bal-unit  { font-size: 13px; color: var(--muted); margin-top: 6px; }
+
+    .rate-box {
+      display: flex; align-items: center; justify-content: space-between;
+      background: var(--green-dim); border: 1px solid rgba(34,197,94,0.18);
+      border-radius: 12px; padding: 14px 16px; margin-bottom: 18px;
+    }
+    .rate-box-label { font-size: 13px; color: var(--muted); }
+    .rate-box-val   { font-family: var(--mono); font-size: 15px; font-weight: 600; color: var(--green); }
+
+    .progress-wrap { margin-bottom: 20px; }
+    .progress-labels {
+      display: flex; justify-content: space-between;
+      font-family: var(--mono); font-size: 10px; color: var(--dim);
+      margin-bottom: 7px;
+    }
+    .progress-track {
+      height: 6px; background: rgba(255,255,255,0.06);
+      border-radius: 4px; overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%; border-radius: 4px;
+      background: linear-gradient(90deg, var(--green), #16a34a);
+      box-shadow: 0 0 10px var(--green-glow);
+      transition: width 0.6s ease;
+    }
+
+    .wallet-input-label {
+      font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--dim); margin-bottom: 8px;
+    }
+    .wallet-input {
+      width: 100%; background: rgba(255,255,255,0.04); border: 1px solid var(--border);
+      border-radius: 10px; padding: 12px 14px;
+      font-family: var(--mono); font-size: 13px; color: var(--text);
+      outline: none; transition: border-color 0.15s; margin-bottom: 14px;
+    }
+    .wallet-input:focus { border-color: rgba(167,139,250,0.35); }
+    .wallet-input::placeholder { color: var(--dim); }
+
+    .btn-full {
+      width: 100%; font-family: var(--font); font-size: 15px; font-weight: 700;
+      padding: 14px; border-radius: 12px; border: none; cursor: pointer;
+      background: linear-gradient(135deg, var(--green), #16a34a);
+      color: #050a05; box-shadow: 0 0 28px rgba(34,197,94,0.15);
+      transition: opacity 0.15s, box-shadow 0.15s;
+    }
+    .btn-full:hover { opacity: 0.88; box-shadow: 0 0 40px rgba(34,197,94,0.25); }
+    .btn-full:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    .trust-note {
+      font-size: 11px; color: var(--dim); line-height: 1.55;
+      text-align: center; margin-top: 12px;
+    }
+    .trust-note strong { color: var(--muted); }
+
+    /* toast */
+    .toast {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px);
+      z-index: 999; background: var(--card); border: 1px solid var(--border-hi);
+      border-radius: 12px; padding: 12px 20px;
+      font-size: 14px; font-weight: 600; white-space: nowrap;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+      transition: transform 0.3s cubic-bezier(.34,1.56,.64,1);
+      display: flex; align-items: center; gap: 10px;
+    }
+    .toast.show { transform: translateX(-50%) translateY(0); }
+    .toast.success { border-color: rgba(34,197,94,0.35); color: var(--green); }
+    .toast.error   { border-color: rgba(239,68,68,0.35);  color: #ef4444; }
+  </style>
+</head>
+<body>
+  <div class="atm" aria-hidden="true"></div>
+
+  <div class="app" id="app">
+    <!-- NAV -->
+    <nav>
+      <a class="nav-brand" href="#">
+        <div class="nav-logo">AP</div>
+        <div>
+          <div class="nav-name">AURAPOINTS</div>
+          <span class="nav-tag">Raid to Earn</span>
+        </div>
+      </a>
+      <div class="nav-right" id="nav-right">
+        <!-- injected by JS depending on state -->
+      </div>
+    </nav>
+
+    <!-- CONTENT (splash or feed) -->
+    <div id="content"></div>
+  </div>
+
+  <!-- CLAIM MODAL -->
+  <div class="overlay" id="claim-overlay">
+    <div class="modal">
+      <button class="modal-close" onclick="closeClaimModal()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+      <h3>Claim your SOL</h3>
+      <p>Every 1,000 aura points = 0.4 SOL. Enter your Solana wallet to receive the payout.</p>
+
+      <div class="claim-bal-box">
+        <div class="claim-bal-label">Your aura balance</div>
+        <div class="claim-bal-num" id="modal-aura">0</div>
+        <div class="claim-bal-unit" id="modal-sol-est">— SOL available to claim</div>
+      </div>
+
+      <div class="rate-box">
+        <span class="rate-box-label">Conversion rate</span>
+        <span class="rate-box-val">1,000 AP = 0.4 SOL</span>
+      </div>
+
+      <div class="progress-wrap">
+        <div class="progress-labels">
+          <span id="prog-label-left">0 AP</span>
+          <span id="prog-label-right">Next milestone: 1,000 AP</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="prog-fill" style="width:0%"></div>
+        </div>
+      </div>
+
+      <div class="wallet-input-label">Your Solana wallet address</div>
+      <input class="wallet-input" id="wallet-input" type="text" placeholder="e.g. 7xKXtg2CW87d..." spellcheck="false" autocomplete="off" />
+
+      <button class="btn-full" id="btn-claim-sol" onclick="claimSol()">Claim SOL</button>
+
+      <p class="trust-note">
+        <strong>We only use X to verify you replied.</strong> We never post on your behalf or store your tokens. SOL is sent directly to the wallet address above.
+      </p>
+    </div>
+  </div>
+
+  <!-- TOAST -->
+  <div class="toast" id="toast"></div>
+
+  <script src="/aurapoints/config.js"></script>
+  <script>
+    // ── State ────────────────────────────────────────────────────────────────
+    var STATE = {
+      connected: false,
+      user: null,          // { id, handle, name, initials }
+      aura: 0,
+      replied: {},         // { [tweetId]: true }
+      verified: {},        // { [tweetId]: true }
+    };
+
+    var LS_KEY = 'aurapoints_v1';
+
+    function getApiBase() {
+      if (typeof window.AURAPOINTS === 'object' && window.AURAPOINTS && window.AURAPOINTS.apiBase) {
+        var b = String(window.AURAPOINTS.apiBase).trim();
+        return b.replace(/\/$/, '');
+      }
+      return '';
+    }
+
+    function resolveTweetStatusId(cardId) {
+      var cfg = (typeof window.AURAPOINTS === 'object' && window.AURAPOINTS) ? window.AURAPOINTS : {};
+      var tid = (cfg.tweetIds && cfg.tweetIds[cardId]) || '';
+      if (tid) return String(tid);
+      if (!getApiBase()) return 'REAL_TWEET_ID_HERE';
+      return '';
+    }
+
+    function loadSaved() {
+      try {
+        var raw = localStorage.getItem(LS_KEY);
+        if (!raw) return;
+        var d = JSON.parse(raw);
+        if (!d || !d.userId) return;
+        STATE.connected = true;
+        var h = (d.handle || 'user').replace(/^@/, '');
+        STATE.user = {
+          id: d.userId,
+          handle: h,
+          name: h,
+          initials: h.slice(0, 2).toUpperCase() || 'X',
+        };
+        STATE.aura = d.aura || 0;
+        STATE.replied = d.replied || {};
+        STATE.verified = d.verified || {};
+      } catch (e) {}
+    }
+
+    function saveState() {
+      if (!STATE.connected || !STATE.user || !STATE.user.id) return;
+      try {
+        localStorage.setItem(LS_KEY, JSON.stringify({
+          userId: STATE.user.id,
+          handle: STATE.user.handle,
+          aura: STATE.aura,
+          replied: STATE.replied,
+          verified: STATE.verified,
+        }));
+      } catch (e) {}
+    }
+
+    function applyOAuthReturn() {
+      var q = new URLSearchParams(window.location.search);
+      if (q.get('x_connected') !== '1') return false;
+      var handle = (q.get('x_handle') || '').replace(/^@/, '');
+      var id = q.get('x_id') || '';
+      STATE.connected = true;
+      STATE.user = {
+        id: id,
+        handle: handle || 'user',
+        name: handle || 'You',
+        initials: (handle || 'xu').slice(0, 2).toUpperCase(),
+      };
+      STATE.aura = STATE.aura || 0;
+      q.delete('x_connected');
+      q.delete('x_handle');
+      q.delete('x_id');
+      var qs = q.toString();
+      var clean = window.location.pathname + (qs ? '?' + qs : '') + window.location.hash;
+      window.history.replaceState({}, '', clean);
+      saveState();
+      return true;
+    }
+
+    // ── Demo project tweets ──────────────────────────────────────────────────
+    // In production: fetched from /api/feed (your project's X timeline)
+    var TWEETS = [
+      {
+        id: 't1',
+        name:    'AURAPOINTS',
+        handle:  '@aurapoints',
+        initials:'AP',
+        time:    '2h',
+        text:    'We just launched Raid to Earn 🛸\n\nReply to our tweets, earn Aura, claim SOL.\n\n1,000 aura = 0.4 SOL. No bots. No spam. X itself enforces one reply per account.\n\nRaid this tweet and get started ↓',
+        replies: 214,
+        likes:   1847,
+        reposts: 392,
+        raidCount: 87,
+      },
+      {
+        id: 't2',
+        name:    'AURAPOINTS',
+        handle:  '@aurapoints',
+        initials:'AP',
+        time:    '5h',
+        text:    'The pool is live. 2.4 SOL dropping to raiders this hour.\n\n👉 Reply to our tweets\n👉 Stack aura points\n👉 Claim SOL every 1,000 AP\n\nMost active raiders are already at 600+ AP. The next batch pays out soon. Don\'t miss it.',
+        replies: 331,
+        likes:   2910,
+        reposts: 618,
+        raidCount: 142,
+      },
+      {
+        id: 't3',
+        name:    'AURAPOINTS',
+        handle:  '@aurapoints',
+        initials:'AP',
+        time:    '1d',
+        text:    'Why AURAPOINTS is different:\n\n✅ Real SOL rewards (not points to nowhere)\n✅ X enforces 1 reply per user — no spam possible\n✅ Pool funded by trading volume — grows as we grow\n✅ No bots, no farms, just real raiders\n\nRaid and earn. That\'s it.',
+        replies: 508,
+        likes:   4221,
+        reposts: 1043,
+        raidCount: 203,
+      },
+    ];
+
+    // The text every raider posts as a reply
+    var RAID_TEXT = 'Raiding with @aurapoints 🛸 The project that pays you to post. Join the raid and earn SOL: aurapoints.xyz #AURAPOINTS #Solana';
+
+    // ── Render helpers ───────────────────────────────────────────────────────
+    function num(n) {
+      if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+      return String(n);
+    }
+
+    function renderNav() {
+      var el = document.getElementById('nav-right');
+      if (!STATE.connected) {
+        el.innerHTML = '';
+        return;
+      }
+      var claimable = Math.floor(STATE.aura / 1000) * 0.4;
+      el.innerHTML = `
+        <div class="aura-pill">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          <span id="nav-aura-num">${STATE.aura.toLocaleString()} AP</span>
+        </div>
+        <button class="btn-claim-nav" onclick="openClaimModal()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M16 12h.01"/></svg>
+          Claim SOL
+        </button>
+        <div class="user-chip">
+          <div class="user-avatar">${STATE.user.initials}</div>
+          @${STATE.user.handle}
+        </div>
+      `;
+    }
+
+    function renderSplash() {
+      document.getElementById('content').innerHTML = `
+        <div class="splash">
+          <div class="splash-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          </div>
+          <h1>Raid tweets.<br><em>Earn SOL.</em></h1>
+          <p>Reply to project tweets from your X account. Each reply earns Aura points. Every 1,000 points = 0.4 SOL sent to your wallet.</p>
+          <button class="btn-connect-x" onclick="connectX()">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.742l7.732-8.83L2 2.25h6.985l4.265 5.642L18.244 2.25Zm-1.161 17.52h1.833L7.084 4.126H5.117L17.083 19.77Z"/></svg>
+            Connect X to start
+          </button>
+          <p class="splash-note">
+            We request <strong>read-only identity access</strong> — we never post on your behalf or store your credentials. <a href="#">Privacy policy</a>
+          </p>
+          <div class="how-row">
+            <div class="how-pill"><span class="n">1</span>Connect X</div>
+            <div class="how-pill"><span class="n">2</span>Reply to tweets</div>
+            <div class="how-pill"><span class="n">3</span>Stack aura points</div>
+            <div class="how-pill"><span class="n">4</span>Claim SOL</div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderFeed() {
+      var cards = TWEETS.map(function(t) {
+        var raided   = STATE.replied[t.id];
+        var verified = STATE.verified[t.id];
+        var raidTotal = t.raidCount + (verified ? 1 : 0);
+
+        var actionBtns = '';
+        if (verified) {
+          actionBtns = `
+            <div class="btn-done">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+              +10 AP earned
+            </div>`;
+        } else if (raided) {
+          actionBtns = `
+            <button class="btn-verify" onclick="verifyReply('${t.id}')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+              I replied — verify
+            </button>`;
+        } else {
+          actionBtns = `
+            <button class="btn-raid primary" onclick="raidTweet('${t.id}')">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.742l7.732-8.83L2 2.25h6.985l4.265 5.642L18.244 2.25Z"/></svg>
+              Reply to earn
+            </button>`;
+        }
+
+        return `
+          <div class="tweet-card" id="card-${t.id}">
+            <div class="tweet-body">
+              <div class="tweet-author">
+                <div class="tweet-avatar">${t.initials}</div>
+                <div class="tweet-author-info">
+                  <div class="tweet-name">
+                    ${t.name}
+                    <span class="tweet-verified" style="display:inline-flex;vertical-align:middle;margin-left:4px">
+                      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    </span>
+                  </div>
+                  <div class="tweet-handle">
+                    <span>${t.handle}</span>
+                    <span style="color:var(--dim)">·</span>
+                    <span class="tweet-time">${t.time}</span>
+                  </div>
+                </div>
+              </div>
+              <div class="tweet-text">${t.text.replace(/\n/g,'<br>')}</div>
+              <div class="tweet-stats">
+                <span class="tweet-stat">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                  ${num(t.replies)}
+                </span>
+                <span class="tweet-stat">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17 1l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+                  ${num(t.reposts)}
+                </span>
+                <span class="tweet-stat">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                  ${num(t.likes)}
+                </span>
+              </div>
+            </div>
+            <div class="raid-bar">
+              <div class="raid-count">
+                <strong>${raidTotal}</strong> raiders earned AP on this tweet
+              </div>
+              <div class="raid-actions">${actionBtns}</div>
+            </div>
+          </div>`;
+      }).join('');
+
+      document.getElementById('content').innerHTML = `
+        <div class="feed-layout">
+          <div class="feed-header">
+            <div>
+              <h2>Project tweets</h2>
+              <div class="feed-header-sub">Reply to earn Aura. X limits one reply per account.</div>
+            </div>
+            <div class="rate-chip">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              1,000 AP = 0.4 SOL
+            </div>
+          </div>
+          ${cards}
+        </div>
+      `;
+    }
+
+    // ── Actions ──────────────────────────────────────────────────────────────
+
+    function connectX() {
+      // In production: redirect to /auth/x/start
+      // Demo: mock a connected user
+      STATE.connected = true;
+      STATE.user = { id: 'u_demo', handle: 'yourusername', name: 'You', initials: 'YO' };
+      STATE.aura = 340;
+      renderNav();
+      renderFeed();
+    }
+
+    function raidTweet(tweetId) {
+      var tweet = TWEETS.find(function(t){ return t.id === tweetId; });
+      if (!tweet) return;
+
+      // Build X intent URL with the raid text
+      var intentUrl = 'https://twitter.com/intent/tweet?in_reply_to=' +
+        encodeURIComponent('REAL_TWEET_ID_HERE') +
+        '&text=' + encodeURIComponent(RAID_TEXT);
+
+      // Open intent in small popup so user stays on site
+      var w = 600, h = 450;
+      var left = Math.round(window.innerWidth  / 2 - w / 2);
+      var top  = Math.round(window.innerHeight / 2 - h / 2);
+      window.open(intentUrl, 'xintent', 'width='+w+',height='+h+',left='+left+',top='+top);
+
+      STATE.replied[tweetId] = true;
+      renderFeed();
+      showToast('Reply opened in X — come back and click "I replied" to verify', 'success');
+    }
+
+    function verifyReply(tweetId) {
+      // In production: POST /api/verify { xUserId, tweetId }
+      // Server checks X API for a reply from this user containing RAID_TEXT
+      // Demo: mock instant verification
+      showToast('Verifying your reply…', 'success');
+
+      setTimeout(function() {
+        STATE.verified[tweetId] = true;
+        STATE.aura += 10;
+        saveState();
+        renderNav();
+        renderFeed();
+        showToast('✓ Reply verified! +10 Aura earned', 'success');
+      }, 1400);
+    }
+
+    // ── Claim modal ──────────────────────────────────────────────────────────
+
+    function openClaimModal() {
+      var aura       = STATE.aura;
+      var milestones = Math.floor(aura / 1000);
+      var solEarned  = (milestones * 0.4).toFixed(2);
+      var pct        = Math.min(100, Math.round((aura % 1000) / 10));
+      var nextMile   = (Math.floor(aura / 1000) + 1) * 1000;
+
+      document.getElementById('modal-aura').textContent = aura.toLocaleString();
+      document.getElementById('modal-sol-est').textContent =
+        milestones > 0
+          ? solEarned + ' SOL ready to claim'
+          : '0 SOL — need ' + (1000 - aura) + ' more AP to unlock first payout';
+      document.getElementById('prog-fill').style.width = pct + '%';
+      document.getElementById('prog-label-left').textContent = (aura % 1000) + ' / 1,000 AP';
+      document.getElementById('prog-label-right').textContent = 'Next milestone: ' + nextMile.toLocaleString() + ' AP';
+
+      var btn = document.getElementById('btn-claim-sol');
+      btn.disabled = milestones === 0;
+      btn.textContent = milestones > 0
+        ? 'Claim ' + solEarned + ' SOL'
+        : 'Keep raiding — ' + (1000 - aura) + ' AP to go';
+
+      document.getElementById('claim-overlay').classList.add('open');
+    }
+
+    function closeClaimModal() {
+      document.getElementById('claim-overlay').classList.remove('open');
+    }
+
+    function claimSol() {
+      var wallet = document.getElementById('wallet-input').value.trim();
+      if (!wallet) {
+        showToast('Enter your Solana wallet address', 'error');
+        return;
+      }
+      if (wallet.length < 32) {
+        showToast('Wallet address looks too short', 'error');
+        return;
+      }
+      // In production: POST /api/claim { wallet, xUserId }
+      showToast('Processing payout to ' + wallet.slice(0,8) + '…', 'success');
+      setTimeout(function() {
+        var milestones = Math.floor(STATE.aura / 1000);
+        var sol = (milestones * 0.4).toFixed(2);
+        STATE.aura = STATE.aura % 1000;
+        saveState();
+        closeClaimModal();
+        renderNav();
+        showToast('✓ ' + sol + ' SOL sent to your wallet!', 'success');
+      }, 1800);
+    }
+
+    // ── Toast ────────────────────────────────────────────────────────────────
+    var toastTimer;
+    function showToast(msg, type) {
+      var el = document.getElementById('toast');
+      el.textContent = msg;
+      el.className = 'toast ' + (type || '');
+      // force reflow
+      void el.offsetWidth;
+      el.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(function() { el.classList.remove('show'); }, 3200);
+    }
+
+    // Close overlay on outside click
+    document.getElementById('claim-overlay').addEventListener('click', function(e) {
+      if (e.target === this) closeClaimModal();
+    });
+
+    // ── Boot ─────────────────────────────────────────────────────────────────
+    if (!applyOAuthReturn()) loadSaved();
+    renderNav();
+    if (STATE.connected) renderFeed();
+    else renderSplash();
+  </script>
+</body>
+</html>
