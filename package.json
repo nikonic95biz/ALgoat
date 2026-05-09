@@ -18,7 +18,7 @@
     "predev": "node scripts/bundle-workspace.mjs",
     "prebuild": "node scripts/bundle-workspace.mjs",
     "dev": "vite",
-    "build": "tsc --noEmit && vite build && mkdir -p dist/aurapoints && cp public/aurapoints/* dist/aurapoints/",
+    "build": "tsc --noEmit && vite build && mkdir -p dist/aurapoints && cp public/aurapoints/* dist/aurapoints/ && cp public/index.html dist/index.html",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
     "bundle-workspace": "node scripts/bundle-workspace.mjs"
