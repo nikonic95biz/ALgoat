@@ -141,23 +141,30 @@ export async function writeLocalFile(
 // ─── CLI file API (solclaw start) ────────────────────────────────────────────
 
 const CLI_API_BASE = "http://127.0.0.1:58472";
+// Cache for 10 seconds so we re-check when CLI starts mid-session
 let _cliAvailable: boolean | null = null;
+let _cliCheckedAt = 0;
+const CLI_CACHE_TTL_MS = 10_000;
 
 /**
  * Returns true if the SolClaw CLI file API server is running on port 58472.
- * Result is cached for the session — the server either started before the
- * browser tab opened or it didn't.
+ * Re-checks every 10 s so the UI auto-connects when the user runs npm start
+ * after the page was already open.
  */
 export async function isCliServerAvailable(): Promise<boolean> {
-  if (_cliAvailable !== null) return _cliAvailable;
+  const now = Date.now();
+  if (_cliAvailable !== null && now - _cliCheckedAt < CLI_CACHE_TTL_MS) {
+    return _cliAvailable;
+  }
   try {
     const res = await fetch(`${CLI_API_BASE}/health`, {
-      signal: AbortSignal.timeout(600),
+      signal: AbortSignal.timeout(2000),
     });
     _cliAvailable = res.ok;
   } catch {
     _cliAvailable = false;
   }
+  _cliCheckedAt = Date.now();
   return _cliAvailable;
 }
 

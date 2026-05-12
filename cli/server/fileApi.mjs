@@ -33,14 +33,19 @@ function walkDir(dir, root, out = []) {
   return out;
 }
 
-function cors(res) {
-  res.setHeader("Access-Control-Allow-Origin", "http://127.0.0.1:58471");
+function cors(res, req) {
+  // Allow any localhost/127.0.0.1 origin regardless of port
+  const origin = req?.headers?.origin ?? "";
+  const allowed = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
+    ? origin
+    : "http://localhost:5173";
+  res.setHeader("Access-Control-Allow-Origin", allowed);
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
-function json(res, data, status = 200) {
-  cors(res);
+function json(res, data, status = 200, req = null) {
+  cors(res, req);
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(JSON.stringify(data));
 }
@@ -64,47 +69,47 @@ export function startFileApiServer(repoRoot) {
     const url = new URL(req.url, `http://127.0.0.1:${FILE_API_PORT}`);
     const pathname = url.pathname;
 
-    if (req.method === "OPTIONS") { cors(res); res.writeHead(204); res.end(); return; }
+    if (req.method === "OPTIONS") { cors(res, req); res.writeHead(204); res.end(); return; }
 
     if (req.method === "GET" && pathname === "/health") {
-      return json(res, { ok: true, root });
+      return json(res, { ok: true, root }, 200, req);
     }
 
     if (req.method === "GET" && pathname === "/files") {
       const paths = walkDir(root, root).sort();
-      return json(res, { paths });
+      return json(res, { paths }, 200, req);
     }
 
     if (req.method === "GET" && pathname === "/file") {
       const filePath = url.searchParams.get("path");
-      if (!filePath) return json(res, { error: "Missing path param" }, 400);
+      if (!filePath) return json(res, { error: "Missing path param" }, 400, req);
       const abs = resolve(root, filePath);
-      if (!abs.startsWith(root)) return json(res, { error: "Path outside repo" }, 403);
+      if (!abs.startsWith(root)) return json(res, { error: "Path outside repo" }, 403, req);
       try {
         const content = await readFile(abs, "utf8");
-        return json(res, { content, path: filePath });
-      } catch { return json(res, { error: "File not found" }, 404); }
+        return json(res, { content, path: filePath }, 200, req);
+      } catch { return json(res, { error: "File not found" }, 404, req); }
     }
 
     if (req.method === "POST" && pathname === "/file") {
       let body;
-      try { body = JSON.parse(await readBody(req)); } catch { return json(res, { error: "Invalid JSON" }, 400); }
+      try { body = JSON.parse(await readBody(req)); } catch { return json(res, { error: "Invalid JSON" }, 400, req); }
       const { path: filePath, content } = body;
-      if (!filePath || typeof content !== "string") return json(res, { error: "Missing path or content" }, 400);
+      if (!filePath || typeof content !== "string") return json(res, { error: "Missing path or content" }, 400, req);
       const abs = resolve(root, filePath);
-      if (!abs.startsWith(root)) return json(res, { error: "Path outside repo" }, 403);
+      if (!abs.startsWith(root)) return json(res, { error: "Path outside repo" }, 403, req);
       try {
         await mkdir(dirname(abs), { recursive: true });
         await writeFile(abs, content, "utf8");
-        return json(res, { ok: true, path: filePath });
-      } catch (e) { return json(res, { error: String(e) }, 500); }
+        return json(res, { ok: true, path: filePath }, 200, req);
+      } catch (e) { return json(res, { error: String(e) }, 500, req); }
     }
 
     if (req.method === "GET" && pathname === "/typecheck") {
-      return json(res, latestTypecheckResult);
+      return json(res, latestTypecheckResult, 200, req);
     }
 
-    cors(res); res.writeHead(404); res.end("Not found");
+    cors(res, req); res.writeHead(404); res.end("Not found");
   });
 
   server.on("error", (err) => {

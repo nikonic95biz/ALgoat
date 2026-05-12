@@ -647,9 +647,17 @@ export function ChatPanel() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ── CLI server detection ───────────────────────────────────────────
+  // ── CLI server detection — re-check every 5 s so the badge appears as soon as
+  //    the user runs `npm start` without needing a page reload ─────────────────
   useEffect(() => {
-    isCliServerAvailable().then(setCliConnected).catch(() => setCliConnected(false));
+    let cancelled = false;
+    const check = () =>
+      isCliServerAvailable()
+        .then((ok) => { if (!cancelled) setCliConnected(ok); })
+        .catch(() => { if (!cancelled) setCliConnected(false); });
+    check();
+    const id = setInterval(check, 5000);
+    return () => { cancelled = true; clearInterval(id); };
   }, []);
 
   // ── Deploy status ──────────────────────────────────────────────────
