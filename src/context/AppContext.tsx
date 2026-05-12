@@ -20,6 +20,8 @@ import {
   requestPermission,
   writeLocalFile,
   clearPersistedHandle,
+  isCliServerAvailable,
+  cliWriteFile,
 } from "@/lib/localWorkspace";
 import { SCALPER_PAPER_CONFIG } from "@/lib/scalperPaperConfig";
 
@@ -84,6 +86,26 @@ function makeGreetingSession(id?: string, name?: string): ChatSession {
     messages: [createAssistantGreetingMessage()],
     createdAt: Date.now(),
   };
+}
+
+/** Persisted shape so we can survive page refresh */
+type PersistedChatState = { sessions: ChatSession[]; activeId: string };
+
+function loadChatSessions(): PersistedChatState {
+  try {
+    const raw = localStorage.getItem(CHAT_SESSIONS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as PersistedChatState;
+      if (parsed?.sessions?.length && parsed.activeId) {
+        // sanity: make sure activeId points at a session that exists
+        const exists = parsed.sessions.some((s) => s.id === parsed.activeId);
+        if (exists) return parsed;
+        return { sessions: parsed.sessions, activeId: parsed.sessions[0]!.id };
+      }
+    }
+  } catch { /* ignore corrupt storage */ }
+  const s = makeGreetingSession();
+  return { sessions: [s], activeId: s.id };
 }
 
 
@@ -437,11 +459,8 @@ const Ctx = createContext<AppState | null>(null);
 export function AppProvider({ children }: { children: ReactNode }) {
   const [model, setModelState] = useState(loadModel);
 
-  // Chat sessions intentionally NOT loaded from localStorage — always start fresh.
-  const [sessionsState, setSessionsState] = useState(() => {
-    const s = makeGreetingSession();
-    return { sessions: [s], activeId: s.id };
-  });
+  // Chat sessions are persisted across page refreshes via localStorage
+  const [sessionsState, setSessionsState] = useState(loadChatSessions);
   const chatSessions = sessionsState.sessions;
   const activeChatId = sessionsState.activeId;
 
@@ -496,11 +515,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // Chat sessions are intentionally NOT persisted — every load starts fresh.
   // Purge any stale chat data left from a previous build.
+  // Persist sessions on every change so refresh keeps chat history
   useEffect(() => {
     try {
-      localStorage.removeItem(CHAT_SESSIONS_KEY);
-      localStorage.removeItem(LEGACY_MESSAGES_KEY);
-    } catch { /* ignore */ }
+      localStorage.setItem(CHAT_SESSIONS_KEY, JSON.stringify(sessionsState));
+    } catch { /* storage full or disabled */ }
+  }, [sessionsState]);
+
+  // One-time cleanup of the legacy single-session key
+  useEffect(() => {
+    try { localStorage.removeItem(LEGACY_MESSAGES_KEY); } catch { /* ignore */ }
   }, []);
 
   useEffect(() => {
@@ -686,12 +710,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const applyFileEdit = useCallback(
     async (path: string, code: string, commitMessage?: string): Promise<string> => {
-      // ── Local-first path (instant HMR) ────────────────────────────
+      // ── SolClaw CLI path (preferred — instant HMR, no browser permission dance) ──
+      if (await isCliServerAvailable()) {
+        await cliWriteFile(path, code);
+        setPendingLocalEdits((prev) => {
+          const next = new Map(prev);
+          next.set(path, code);
+          return next;
+        });
+        setLastAppliedPath(path);
+        setApplyEditTick((t) => t + 1);
+        return ""; // no commit SHA — file is local only until pushed
+      }
+
+      // ── File System Access API path (Chrome/Edge with folder picker) ──
       if (localWorkspaceHandle) {
         const granted = await requestPermission(localWorkspaceHandle);
         if (!granted) throw new Error("Local workspace permission denied — re-connect in Setup.");
         await writeLocalFile(localWorkspaceHandle, path, code);
-        // Queue the edit so the user can push to GitHub later in one batch
         setPendingLocalEdits((prev) => {
           const next = new Map(prev);
           next.set(path, code);
@@ -705,7 +741,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // ── GitHub fallback ───────────────────────────────────────────
       const { token, owner, repo, branch } = githubWorkspace;
       if (!token.trim() || !owner.trim() || !repo.trim()) {
-        throw new Error("Connect your GitHub repo in Setup (or connect a local workspace folder for instant edits).");
+        throw new Error("Connect your GitHub repo in Setup (or run `npm start` for instant edits).");
       }
       const br = branch.trim() || "main";
 

@@ -230,6 +230,7 @@ function ApplyButtons({
   content,
   pending,
   localWorkspaceConnected,
+  cliConnected,
   onDiff,
   onApplyAll,
   onAddAlgo,
@@ -238,6 +239,7 @@ function ApplyButtons({
   content: string;
   pending: boolean;
   localWorkspaceConnected: boolean;
+  cliConnected: boolean;
   onDiff: (path: string, code: string) => void;
   onApplyAll: (edits: { path: string; code: string }[]) => void;
   onAddAlgo: (name: string, description: string) => void;
@@ -249,8 +251,9 @@ function ApplyButtons({
 
   if ((edits.length === 0 && algos.length === 0 && !configPatch) || pending) return null;
 
-  const fileLabel = localWorkspaceConnected ? "Write locally" : "Apply";
-  const fileCreateLabel = localWorkspaceConnected ? "Create locally" : "Create";
+  const writesLocally = cliConnected || localWorkspaceConnected;
+  const fileLabel = writesLocally ? "Write" : "Apply";
+  const fileCreateLabel = writesLocally ? "Create" : "Create";
 
   return (
     <div className="mt-3 flex flex-wrap gap-1.5">
@@ -332,13 +335,18 @@ function PostCommitRow({
   repo: string;
   onDismiss: () => void;
 }) {
-  const commitUrl = `https://github.com/${owner}/${repo}/commit/${result.sha}`;
-  const repoUrl = `https://github.com/${owner}/${repo}`;
+  // Empty sha means the file was written locally (CLI or File System Access) — never committed yet.
+  const wroteLocally = !result.sha;
+  const commitUrl = result.sha ? `https://github.com/${owner}/${repo}/commit/${result.sha}` : "";
+
+  const summary = result.paths.length === 1 ? result.paths[0] : `${result.paths.length} files`;
 
   return (
     <div className="mt-2.5 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-[11.5px] text-[var(--color-fg-dim)]">
-      <span className="text-emerald-400/80">✓ {result.paths.length === 1 ? result.paths[0] : `${result.paths.length} files`} committed</span>
-      {result.sha ? (
+      <span className="text-emerald-400/80">
+        ✓ {summary} {wroteLocally ? "written to disk · live now" : "committed to GitHub"}
+      </span>
+      {!wroteLocally ? (
         <a
           href={commitUrl}
           target="_blank"
@@ -347,17 +355,12 @@ function PostCommitRow({
         >
           View on GitHub <ExternalLink className="size-3" strokeWidth={1.5} />
         </a>
-      ) : null}
-      <a
-        href={repoUrl}
-        target="_blank"
-        rel="noreferrer"
-        className="inline-flex items-center gap-1 text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
-        title="Vercel auto-deploys when you push — connect your fork at vercel.com"
-      >
-        <Rocket className="size-3" strokeWidth={1.5} />
-        Auto-deploys on push
-      </a>
+      ) : (
+        <span className="inline-flex items-center gap-1 text-[var(--color-fg-muted)]" title="Use the Push button to commit to GitHub when ready">
+          <Rocket className="size-3" strokeWidth={1.5} />
+          Not pushed to GitHub yet
+        </span>
+      )}
       <button type="button" onClick={onDismiss} className="ml-auto text-[var(--color-fg-dim)] hover:text-[var(--color-fg-muted)]">
         <X className="size-3.5" strokeWidth={1.5} />
       </button>
@@ -373,6 +376,7 @@ function ChatTurnSection({
   commitResults,
   githubWorkspace,
   localWorkspaceConnected,
+  cliConnected,
   onCopy,
   onDiff,
   onApplyAll,
@@ -389,6 +393,7 @@ function ChatTurnSection({
   commitResults: Map<string, CommitResult>;
   githubWorkspace: { token: string; owner: string; repo: string; branch: string };
   localWorkspaceConnected: boolean;
+  cliConnected: boolean;
   onCopy: (id: string, content: string) => void;
   onDiff: (path: string, code: string) => void;
   onApplyAll: (edits: { path: string; code: string }[]) => void;
@@ -451,6 +456,7 @@ function ChatTurnSection({
                 content={asst.content}
                 pending={pending && isLatestTurn}
                 localWorkspaceConnected={localWorkspaceConnected}
+                cliConnected={cliConnected}
                 onDiff={onDiff}
                 onApplyAll={onApplyAll}
                 onAddAlgo={onAddAlgo}
@@ -1297,6 +1303,7 @@ export function ChatPanel() {
             commitResults={commitResults}
             githubWorkspace={githubWorkspace}
             localWorkspaceConnected={localWorkspaceHandle !== null}
+            cliConnected={cliConnected}
             onCopy={copyMessage}
             onDiff={(path, code) => void openDiff(path, code)}
             onApplyAll={(edits) => void handleApplyAll(edits, turns[idx]?.assistant?.id)}

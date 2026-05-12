@@ -107,6 +107,14 @@ export function startFileApiServer(repoRoot) {
     cors(res); res.writeHead(404); res.end("Not found");
   });
 
+  server.on("error", (err) => {
+    if (err.code === "EADDRINUSE") {
+      console.error(`  \u26a0 File API:   port ${FILE_API_PORT} already in use — kill other solclaw processes first`);
+      process.exit(1);
+    }
+    throw err;
+  });
+
   server.listen(FILE_API_PORT, "127.0.0.1", () => {
     console.log(`  \u2713 File API:   http://127.0.0.1:${FILE_API_PORT}`);
   });
