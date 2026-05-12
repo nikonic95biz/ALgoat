@@ -19,6 +19,7 @@ import {
   openLocalWorkspace,
   requestPermission,
   writeLocalFile,
+  readLocalFile,
   clearPersistedHandle,
 } from "@/lib/localWorkspace";
 import { SCALPER_PAPER_CONFIG } from "@/lib/scalperPaperConfig";
@@ -437,8 +438,20 @@ const Ctx = createContext<AppState | null>(null);
 export function AppProvider({ children }: { children: ReactNode }) {
   const [model, setModelState] = useState(loadModel);
 
-  // Chat sessions intentionally NOT loaded from localStorage — always start fresh.
+  // Chat sessions persist across reloads via localStorage so users don't lose history.
   const [sessionsState, setSessionsState] = useState(() => {
+    try {
+      const raw = localStorage.getItem(CHAT_SESSIONS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { sessions?: ChatSession[]; activeId?: string };
+        if (parsed.sessions?.length) {
+          const activeId = parsed.activeId && parsed.sessions.some((s) => s.id === parsed.activeId)
+            ? parsed.activeId
+            : parsed.sessions[0]!.id;
+          return { sessions: parsed.sessions, activeId };
+        }
+      }
+    } catch { /* fall through to fresh greeting */ }
     const s = makeGreetingSession();
     return { sessions: [s], activeId: s.id };
   });
@@ -494,13 +507,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try { localStorage.setItem(key, value); } catch { /* QuotaExceededError — silently ignore */ }
   }
 
-  // Chat sessions are intentionally NOT persisted — every load starts fresh.
-  // Purge any stale chat data left from a previous build.
+  // Persist chat sessions across reloads (debounced via React batching).
   useEffect(() => {
-    try {
-      localStorage.removeItem(CHAT_SESSIONS_KEY);
-      localStorage.removeItem(LEGACY_MESSAGES_KEY);
-    } catch { /* ignore */ }
+    lsSave(CHAT_SESSIONS_KEY, JSON.stringify(sessionsState));
+  }, [sessionsState]);
+
+  // One-time purge of legacy single-session storage.
+  useEffect(() => {
+    try { localStorage.removeItem(LEGACY_MESSAGES_KEY); } catch { /* ignore */ }
   }, []);
 
   useEffect(() => {
@@ -690,6 +704,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (localWorkspaceHandle) {
         const granted = await requestPermission(localWorkspaceHandle);
         if (!granted) throw new Error("Local workspace permission denied — re-connect in Setup.");
+
+        // Safety guard: refuse to overwrite a substantial file with a tiny stub.
+        // (Models occasionally output a 3-line placeholder in place of a 1000-line component.)
+        try {
+          const existing = await readLocalFile(localWorkspaceHandle, path);
+          const isStubby = code.length < 200 && existing.length > 800 && code.length < existing.length * 0.3;
+          if (isStubby) {
+            throw new Error(
+              `Refused to overwrite ${path}: new content is suspiciously small ` +
+              `(${code.length} chars vs ${existing.length} existing). ` +
+              `The model likely produced a placeholder. Ask it to regenerate the full file, ` +
+              `or @-mention the file first so it can see the existing content.`,
+            );
+          }
+        } catch (e) {
+          if (e instanceof Error && e.message.startsWith("Refused to overwrite")) throw e;
+          // file doesn't exist yet — that's fine for new files
+        }
+
         await writeLocalFile(localWorkspaceHandle, path, code);
         // Queue the edit so the user can push to GitHub later in one batch
         setPendingLocalEdits((prev) => {

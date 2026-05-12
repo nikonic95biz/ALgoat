@@ -52,6 +52,7 @@ import {
   githubGetFileContent,
   type WorkflowRunStatus,
 } from "@/lib/githubApi";
+import { readLocalFile, buildLocalExportsDigest } from "@/lib/localWorkspace";
 import type { ChatMessage, ModelSettings } from "@/types";
 import { ChatEmptyState } from "@/components/_ChatEmptyState";
 
@@ -858,21 +859,26 @@ export function ChatPanel() {
       { role: "user" as const, content: text },
     ];
 
-    // Fetch @mentioned files (respects the abort signal)
+    // Fetch @mentioned files — prefer local workspace (instant disk read) over GitHub.
     let mentionContext = "";
     if (atMentionedPaths.length > 0) {
-      const { token, owner, repo, branch } = githubWorkspace;
-      if (token && owner && repo) {
-        const snippets: string[] = [];
-        for (const p of atMentionedPaths.slice(0, 3)) {
-          if (abort.signal.aborted) break;
-          try {
-            const { text: fileText } = await githubGetFileContent(token, owner, repo, branch || "main", p);
-            snippets.push(`### @${p}\n\`\`\`\n${fileText.slice(0, 4000)}\n\`\`\``);
-          } catch { /* skip */ }
-        }
-        if (snippets.length) mentionContext = "\n\n## @mentioned files\n" + snippets.join("\n\n");
+      const snippets: string[] = [];
+      for (const p of atMentionedPaths.slice(0, 5)) {
+        if (abort.signal.aborted) break;
+        try {
+          let fileText: string;
+          if (localWorkspaceHandle) {
+            fileText = await readLocalFile(localWorkspaceHandle, p);
+          } else {
+            const { token, owner, repo, branch } = githubWorkspace;
+            if (!token || !owner || !repo) continue;
+            const result = await githubGetFileContent(token, owner, repo, branch || "main", p);
+            fileText = result.text;
+          }
+          snippets.push(`### @${p}\n\`\`\`\n${fileText.slice(0, 4000)}\n\`\`\``);
+        } catch { /* skip */ }
       }
+      if (snippets.length) mentionContext = "\n\n## @mentioned files\n" + snippets.join("\n\n");
     }
 
     // Bail out cleanly if the user stopped during the mention fetch phase
@@ -882,6 +888,34 @@ export function ChatPanel() {
       setPending(false);
       setComposerBusy(false);
       return;
+    }
+
+    // ── API grounding (local workspace only) ─────────────────────────
+    // Ship the actual exports digest + full src/types.ts so the LLM can't
+    // hallucinate hooks, types, or imports that don't exist in this codebase.
+    let apiSurfaceContext = "";
+    if (localWorkspaceHandle) {
+      try {
+        const [digest, typesSrc] = await Promise.all([
+          buildLocalExportsDigest(localWorkspaceHandle).catch(() => ({} as Record<string, string[]>)),
+          readLocalFile(localWorkspaceHandle, "src/types.ts").catch(() => ""),
+        ]);
+        const digestLines = Object.entries(digest)
+          .filter(([p]) => p.startsWith("src/"))
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([p, names]) => `- \`${p}\`: ${names.join(", ")}`)
+          .join("\n");
+        const parts: string[] = [
+          "\n\n## Real exports in this repo (authoritative — do NOT invent names)",
+          "Every symbol you import MUST appear in this list. If it doesn't, stop and ask the user to @-mention the file.",
+          digestLines || "(digest empty — local workspace may have just been connected)",
+        ];
+        if (typesSrc) {
+          parts.push("\n### Full content of `src/types.ts` (small, always shipped)");
+          parts.push("```typescript\n" + typesSrc + "\n```");
+        }
+        apiSurfaceContext = parts.join("\n");
+      } catch { /* local workspace permission lapsed — skip */ }
     }
 
     const liveContext = buildLiveContext({
@@ -900,6 +934,7 @@ export function ChatPanel() {
       buildComposerSystemPrompt(githubWorkspace) +
       "\n\n---\n" +
       liveContext +
+      apiSurfaceContext +
       mentionContext;
 
     // ── Guaranteed status so the bubble is never empty on error ──────

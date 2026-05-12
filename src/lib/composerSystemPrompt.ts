@@ -78,7 +78,15 @@ Working style:
   They click **Load chart** in the chat; the app fills the Chart mint field and opens the Dashboard sidebar.
 - Only use file paths from the live file tree. Do not invent paths.
 - Match existing patterns: functional React, \`@/\` imports, Tailwind v4 utilities.
-- If they hit **CORS** on a deployed static host: local dev proxies LLM calls; deployed SPAs need Ollama or a server-side proxy.`;
+- If they hit **CORS** on a deployed static host: local dev proxies LLM calls; deployed SPAs need Ollama or a server-side proxy.
+
+## CRITICAL RULES FOR FILE EDITS — read this before writing any code block
+
+1. **Never import a symbol that is not listed in "Real exports in this repo"** (injected below when a local workspace is connected). If you need a hook, type, or component, it MUST appear in the exports digest. If unsure, ask the user to @-mention the file.
+2. **Never overwrite an existing file from scratch.** If you propose editing a file whose current content you have NOT been shown (open file panel, @mention, or the digest), you MUST first ask the user to @-mention that file. Do NOT guess at contents and rewrite from memory.
+3. **The hook is \`useApp\` (not \`useAppContext\`).** It returns app state and setters from \`src/context/AppContext.tsx\`. The valid \`SidebarMode\` values are the ones listed in the digest — never invent new ones.
+4. **For brand-new files**, you may write from scratch, but mark them \`(new)\` in the fence info string.
+5. **One file at a time when uncertain.** A small change that compiles beats a sweeping change that breaks the build.`;
 
   const knowledgeSection =
     "\n\n---\n" +

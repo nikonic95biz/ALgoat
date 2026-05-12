@@ -137,3 +137,122 @@ export async function writeLocalFile(
   await writable.write(content);
   await writable.close();
 }
+
+// ─── File reader / lister ─────────────────────────────────────────────────────
+
+/**
+ * Read the contents of a file inside the local workspace.
+ * Throws if the file doesn't exist or permission is denied.
+ */
+export async function readLocalFile(
+  dirHandle: FileSystemDirectoryHandle,
+  path: string,
+): Promise<string> {
+  const parts = path.replace(/^\//, "").split("/");
+  const fileName = parts.pop();
+  if (!fileName) throw new Error(`Invalid path: ${path}`);
+
+  let current: FileSystemDirectoryHandle = dirHandle;
+  for (const segment of parts) {
+    current = await current.getDirectoryHandle(segment, { create: false });
+  }
+  const fileHandle = await current.getFileHandle(fileName, { create: false });
+  const file = await fileHandle.getFile();
+  return await file.text();
+}
+
+const SKIP_DIRS = new Set([
+  "node_modules", ".git", "dist", ".vite", "coverage",
+  "build", ".next", ".turbo", ".cache", "bundled-workspace",
+]);
+const SKIP_EXTS = new Set([
+  ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico",
+  ".woff", ".woff2", ".ttf", ".eot", ".zip", ".lock",
+  ".mp4", ".mov", ".webm",
+]);
+
+/**
+ * Walk the local workspace and return relative file paths.
+ * Skips heavy/binary directories and files.
+ */
+export async function listLocalFiles(
+  dirHandle: FileSystemDirectoryHandle,
+  maxFiles = 500,
+): Promise<string[]> {
+  const out: string[] = [];
+
+  async function walk(handle: FileSystemDirectoryHandle, prefix: string): Promise<void> {
+    if (out.length >= maxFiles) return;
+    // values() is async iterable in the File System Access API
+    const entries = handle as unknown as AsyncIterable<FileSystemHandle>;
+    for await (const entry of entries) {
+      if (out.length >= maxFiles) return;
+      if (entry.kind === "directory") {
+        if (SKIP_DIRS.has(entry.name)) continue;
+        const childPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+        await walk(entry as FileSystemDirectoryHandle, childPath);
+      } else if (entry.kind === "file") {
+        const dotIdx = entry.name.lastIndexOf(".");
+        const ext = dotIdx !== -1 ? entry.name.slice(dotIdx).toLowerCase() : "";
+        if (SKIP_EXTS.has(ext)) continue;
+        const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+        out.push(relPath);
+      }
+    }
+  }
+
+  try {
+    await walk(dirHandle, "");
+  } catch {
+    /* permission may have lapsed — return what we got */
+  }
+  return out.sort();
+}
+
+/**
+ * Build an exports digest from the local workspace — { path: [exportNames] }.
+ * Used to ground the chat LLM so it can't hallucinate hooks/types/components.
+ * Cached for 15 s so we don't re-walk on every chat send.
+ */
+let _digestCache: { handle: FileSystemDirectoryHandle; digest: Record<string, string[]>; at: number } | null = null;
+const DIGEST_TTL_MS = 15_000;
+
+export async function buildLocalExportsDigest(
+  dirHandle: FileSystemDirectoryHandle,
+): Promise<Record<string, string[]>> {
+  const now = Date.now();
+  if (_digestCache && _digestCache.handle === dirHandle && now - _digestCache.at < DIGEST_TTL_MS) {
+    return _digestCache.digest;
+  }
+
+  const paths = (await listLocalFiles(dirHandle, 800)).filter(
+    (p) => /\.(ts|tsx)$/.test(p) && !p.endsWith(".d.ts"),
+  );
+  const digest: Record<string, string[]> = {};
+  for (const rel of paths) {
+    try {
+      const src = await readLocalFile(dirHandle, rel);
+      const names = extractExportNames(src);
+      if (names.length > 0) digest[rel] = names;
+    } catch {
+      /* skip unreadable file */
+    }
+  }
+  _digestCache = { handle: dirHandle, digest, at: Date.now() };
+  return digest;
+}
+
+function extractExportNames(source: string): string[] {
+  const names = new Set<string>();
+  const reDecl = /^\s*export\s+(?:default\s+)?(?:async\s+)?(?:function|class|const|let|var|type|interface|enum)\s+([A-Za-z_$][\w$]*)/gm;
+  let m: RegExpExecArray | null;
+  while ((m = reDecl.exec(source)) !== null) names.add(m[1]!);
+  const reList = /^\s*export\s*\{([^}]+)\}/gm;
+  while ((m = reList.exec(source)) !== null) {
+    for (const part of m[1]!.split(",")) {
+      const trimmed = part.trim().split(/\s+as\s+/).pop()!.trim();
+      if (trimmed && /^[A-Za-z_$][\w$]*$/.test(trimmed)) names.add(trimmed);
+    }
+  }
+  return [...names].sort();
+}
