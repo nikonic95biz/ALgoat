@@ -85,6 +85,8 @@ function AnalyticsPanel() {
   const tradingWalletPk = useMemo(() => getPumpPortalTradingWalletPubkey(), [pumpCfgRev]);
 
   const [tradingNotice, setTradingNotice] = useState<string | null>(null);
+  const [algoTab, setAlgoTab] = useState<"trading" | "tab2">("trading");
+
   useEffect(() => {
     if (!tradingNotice) return;
     const tick = window.setTimeout(() => setTradingNotice(null), 5200);
@@ -134,7 +136,35 @@ function AnalyticsPanel() {
       style={{ background: "var(--color-bg-sideBar)" }}
     >
       <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden unt-panel-inner">
-        <section className="unt-section-card space-y-4">
+        {/* ── Tab strip ───────────────────────────────────────────────── */}
+        <div className="flex border-b border-[var(--color-border-subtle)] px-3 pt-2">
+          {(["trading", "tab2"] as const).map((tab) => {
+            const label = tab === "trading" ? "Algo Trading" : "Tab 2";
+            const active = algoTab === tab;
+            return (
+              <button
+                key={tab}
+                onClick={() => setAlgoTab(tab)}
+                className={
+                  "mr-1 rounded-t px-3 py-1.5 text-xs font-medium transition-colors " +
+                  (active
+                    ? "border border-b-0 border-[var(--color-border-subtle)] bg-[var(--color-bg-sideBar)] text-[var(--color-fg-default)]"
+                    : "text-[var(--color-fg-muted)] hover:text-[var(--color-fg-default)]")
+                }
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
+        {algoTab === "tab2" ? (
+          <div className="p-4 text-sm text-[var(--color-fg-muted)]">
+            Tab 2 — add your content here.
+          </div>
+        ) : null}
+
+        <section className={algoTab === "trading" ? "unt-section-card space-y-4" : "hidden"}>
           <div>
             <h2 className="unt-section-title">Algo trading</h2>
             <p className="unt-help-text mt-2">
