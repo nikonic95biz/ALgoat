@@ -56,6 +56,7 @@ import {
   isCliServerAvailable,
   cliReadFile,
   cliGetTypecheckResult,
+  cliGetExportsDigest,
 } from "@/lib/localWorkspace";
 import type { ChatMessage, ModelSettings } from "@/types";
 import { ChatEmptyState } from "@/components/_ChatEmptyState";
@@ -936,6 +937,35 @@ export function ChatPanel() {
       return;
     }
 
+    // ── API grounding (CLI only) ─────────────────────────────────────
+    // Always ship the actual exports digest + src/types.ts so the LLM cannot
+    // hallucinate hooks, types, or import names. This is the single biggest
+    // fix for bad edits — without it the LLM made up useAppContext, etc.
+    let apiSurfaceContext = "";
+    if (cliConnected) {
+      try {
+        const [digest, typesSrc] = await Promise.all([
+          cliGetExportsDigest().catch(() => ({} as Record<string, string[]>)),
+          cliReadFile("src/types.ts").catch(() => ""),
+        ]);
+        const digestLines = Object.entries(digest)
+          .filter(([p]) => p.startsWith("src/"))
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([p, names]) => `- \`${p}\`: ${names.join(", ")}`)
+          .join("\n");
+        const parts: string[] = [
+          "\n\n## Real exports in this repo (authoritative — do NOT invent names)",
+          "Every symbol you import MUST appear in this list. If it doesn't, stop and ask.",
+          digestLines || "(digest empty — CLI may not have scanned yet)",
+        ];
+        if (typesSrc) {
+          parts.push("\n### Full content of `src/types.ts` (small, always shipped)");
+          parts.push("```typescript\n" + typesSrc + "\n```");
+        }
+        apiSurfaceContext = parts.join("\n");
+      } catch { /* CLI unreachable — skip */ }
+    }
+
     const liveContext = buildLiveContext({
       chartAnalytics,
       selectedAlgoId,
@@ -952,6 +982,7 @@ export function ChatPanel() {
       buildComposerSystemPrompt(githubWorkspace) +
       "\n\n---\n" +
       liveContext +
+      apiSurfaceContext +
       mentionContext;
 
     // ── Guaranteed status so the bubble is never empty on error ──────

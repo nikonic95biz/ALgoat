@@ -3,13 +3,13 @@
  */
 
 import { createServer } from "node:http";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, readFile as readFileAsync } from "node:fs/promises";
 import { join, dirname, relative, resolve } from "node:path";
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync, statSync, readFileSync } from "node:fs";
 
 export const FILE_API_PORT = 58472;
 
-const SKIP_DIRS = new Set(["node_modules", ".git", "dist", ".vite", "coverage"]);
+const SKIP_DIRS = new Set(["node_modules", ".git", "dist", ".vite", "coverage", "bundled-workspace"]);
 const SKIP_EXTS = new Set([".png",".jpg",".jpeg",".gif",".webp",".ico",".woff",".woff2",".ttf",".eot",".zip",".lock"]);
 
 function walkDir(dir, root, out = []) {
@@ -62,6 +62,40 @@ function readBody(req) {
 export let latestTypecheckResult = { clean: true, errors: [], checkedAt: null };
 export function setTypecheckResult(result) { latestTypecheckResult = result; }
 
+/**
+ * Scan a TS/TSX file for top-level export names (functions, types, components, consts).
+ * Cheap regex pass — good enough to ground the LLM without bundling a full TS parser.
+ */
+function extractExports(source) {
+  const names = new Set();
+  // export (default) function/class/const/let/var/type/interface/enum NAME
+  const reDecl = /^\s*export\s+(?:default\s+)?(?:async\s+)?(?:function|class|const|let|var|type|interface|enum)\s+([A-Za-z_$][\w$]*)/gm;
+  let m;
+  while ((m = reDecl.exec(source)) !== null) names.add(m[1]);
+  // export { a, b as c }
+  const reList = /^\s*export\s*\{([^}]+)\}/gm;
+  while ((m = reList.exec(source)) !== null) {
+    for (const part of m[1].split(",")) {
+      const trimmed = part.trim().split(/\s+as\s+/).pop().trim();
+      if (trimmed && /^[A-Za-z_$][\w$]*$/.test(trimmed)) names.add(trimmed);
+    }
+  }
+  return [...names].sort();
+}
+
+function buildExportsDigest(root) {
+  const paths = walkDir(root, root).filter((p) => /\.(ts|tsx)$/.test(p) && !p.endsWith(".d.ts"));
+  const digest = {};
+  for (const rel of paths) {
+    try {
+      const src = readFileSync(join(root, rel), "utf8");
+      const exports = extractExports(src);
+      if (exports.length > 0) digest[rel] = exports;
+    } catch { /* skip */ }
+  }
+  return digest;
+}
+
 export function startFileApiServer(repoRoot) {
   const root = resolve(repoRoot);
 
@@ -107,6 +141,15 @@ export function startFileApiServer(repoRoot) {
 
     if (req.method === "GET" && pathname === "/typecheck") {
       return json(res, latestTypecheckResult, 200, req);
+    }
+
+    if (req.method === "GET" && pathname === "/exports-digest") {
+      try {
+        const digest = buildExportsDigest(root);
+        return json(res, { digest }, 200, req);
+      } catch (e) {
+        return json(res, { error: String(e) }, 500, req);
+      }
     }
 
     cors(res, req); res.writeHead(404); res.end("Not found");

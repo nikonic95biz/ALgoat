@@ -22,6 +22,7 @@ import {
   clearPersistedHandle,
   isCliServerAvailable,
   cliWriteFile,
+  cliReadFile,
 } from "@/lib/localWorkspace";
 import { SCALPER_PAPER_CONFIG } from "@/lib/scalperPaperConfig";
 
@@ -712,6 +713,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     async (path: string, code: string, commitMessage?: string): Promise<string> => {
       // ── SolClaw CLI path (preferred — instant HMR, no browser permission dance) ──
       if (await isCliServerAvailable()) {
+        // Safety guard: refuse to overwrite a substantial file with a tiny stub.
+        // (The LLM previously overwrote src/types.ts (60 lines) with 3 lines of placeholder comments.)
+        try {
+          const existing = await cliReadFile(path);
+          const existingLen = existing.length;
+          const newLen = code.length;
+          const isStubby = newLen < 200 && existingLen > 800 && newLen < existingLen * 0.3;
+          if (isStubby) {
+            throw new Error(
+              `Refused to overwrite ${path}: new content is suspiciously small ` +
+              `(${newLen} chars vs ${existingLen} existing). The model likely produced a placeholder. ` +
+              `Ask it to regenerate with the full file content, or @-mention the file first.`,
+            );
+          }
+        } catch (e) {
+          // If it's our safeguard error, re-throw. If it's a 404 (new file), continue.
+          if (e instanceof Error && e.message.startsWith("Refused to overwrite")) throw e;
+          // file doesn't exist yet — that's fine for new files
+        }
+
         await cliWriteFile(path, code);
         setPendingLocalEdits((prev) => {
           const next = new Map(prev);

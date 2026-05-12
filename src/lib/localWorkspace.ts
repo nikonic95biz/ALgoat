@@ -212,3 +212,23 @@ export async function cliGetTypecheckResult(): Promise<{
   if (!res.ok) throw new Error(`CLI /typecheck failed: ${res.status}`);
   return res.json();
 }
+
+/**
+ * Fetch an "exports digest" of every .ts/.tsx file in the repo:
+ *   { "src/types.ts": ["ChatRole", "ChatSession", ...], ... }
+ * Used to ground the LLM so it can't hallucinate imports/hooks.
+ */
+let _digestCache: Record<string, string[]> | null = null;
+let _digestCachedAt = 0;
+const DIGEST_TTL_MS = 15_000;
+
+export async function cliGetExportsDigest(): Promise<Record<string, string[]>> {
+  const now = Date.now();
+  if (_digestCache && now - _digestCachedAt < DIGEST_TTL_MS) return _digestCache;
+  const res = await fetch(`${CLI_API_BASE}/exports-digest`);
+  if (!res.ok) throw new Error(`CLI /exports-digest failed: ${res.status}`);
+  const data = (await res.json()) as { digest: Record<string, string[]> };
+  _digestCache = data.digest;
+  _digestCachedAt = now;
+  return _digestCache;
+}
