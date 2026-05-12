@@ -26,7 +26,6 @@ import { githubForkUpstreamIntoViewerAccount } from "@/lib/githubApi";
 import { getDefaultGithubUpstream } from "@/lib/githubUpstreamDefaults";
 import { computeSetupSteps } from "@/lib/setupProgress";
 import { isFileSystemAccessSupported } from "@/lib/localWorkspace";
-import { isLikelyLocalLlm } from "@/lib/llmPresets";
 
 const PORTAL_SETUP_URL = "https://pumpportal.fun/trading-api/setup";
 
@@ -188,17 +187,14 @@ export function SetupPanel() {
 
   const backend = getLlmBackend(backendIdResolved);
 
-  const isLocalBackend = isLikelyLocalLlm(backend.baseUrl);
-
   useEffect(() => {
     let alive = true;
-    // For local backends (Ollama etc.) we fetch models without an API key.
-    // For remote backends we still require a key to avoid unauthenticated calls.
-    const canFetch = backend.fetchModelsList && (isLocalBackend || draftLlmKey.trim().length > 0);
-    if (!canFetch) {
+    if (!backend.fetchModelsList || !draftLlmKey.trim()) {
       setRemoteModels(null);
       setModelsLoading(false);
-      return () => { alive = false; };
+      return () => {
+        alive = false;
+      };
     }
     setModelsLoading(true);
     setRemoteModels(null);
@@ -207,8 +203,10 @@ export function SetupPanel() {
       setModelsLoading(false);
       setRemoteModels(ids);
     });
-    return () => { alive = false; };
-  }, [backend.baseUrl, backend.fetchModelsList, backend.staticModels, draftLlmKey, isLocalBackend]);
+    return () => {
+      alive = false;
+    };
+  }, [backend.baseUrl, backend.fetchModelsList, backend.staticModels, draftLlmKey]);
 
   const displayModels = useMemo(() => {
     if (remoteModels?.length) return remoteModels;
@@ -425,30 +423,24 @@ export function SetupPanel() {
 
           <div>
             <label className="unt-field-label">
-              LLM API key{isLocalBackend && <span className="ml-1.5 text-[11px] font-normal text-emerald-500">optional for local models</span>}
+              LLM API key
             </label>
-            {isLocalBackend ? (
-              <p className="unt-help-text mb-1.5">
-                Ollama runs locally — no API key needed. Leave blank or type any value.
-                The model list below is fetched live from your Ollama instance.
-              </p>
-            ) : null}
             <input
               type="password"
               autoComplete="off"
               value={draftLlmKey}
               onChange={(e) => setDraftLlmKey(e.target.value)}
-              placeholder={isLocalBackend ? "No key needed (leave blank)" : "API key (Anthropic, OpenAI, OpenRouter, Groq, …)"}
+              placeholder="API key (Anthropic, OpenAI, OpenRouter, Groq, …)"
               className="unt-input w-full font-mono text-[13px]"
               aria-label="LLM API key"
             />
-            {!isLocalBackend && inferredFromKey ? (
+            {inferredFromKey ? (
               <p className="unt-help-text mt-1.5">
                 Detected from key:{" "}
                 <span className="text-[var(--color-fg-muted)]">{getLlmBackend(inferredFromKey).label}</span>
                 {inferredFromKey === backendIdResolved ? "" : " — waits for auto-switch after paste."}
               </p>
-            ) : !isLocalBackend && draftLlmKey.trim().length > 12 ? (
+            ) : draftLlmKey.trim().length > 12 ? (
               <p className="unt-help-text mt-1.5">
                 Could not infer provider from this key — choose <span className="text-[var(--color-fg-muted)]">API provider</span>{" "}
                 manually (e.g. Mistral, Together).

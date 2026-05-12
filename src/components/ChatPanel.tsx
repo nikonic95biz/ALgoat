@@ -52,12 +52,6 @@ import {
   githubGetFileContent,
   type WorkflowRunStatus,
 } from "@/lib/githubApi";
-import {
-  isCliServerAvailable,
-  cliReadFile,
-  cliGetTypecheckResult,
-  cliGetExportsDigest,
-} from "@/lib/localWorkspace";
 import type { ChatMessage, ModelSettings } from "@/types";
 import { ChatEmptyState } from "@/components/_ChatEmptyState";
 
@@ -231,7 +225,6 @@ function ApplyButtons({
   content,
   pending,
   localWorkspaceConnected,
-  cliConnected,
   onDiff,
   onApplyAll,
   onAddAlgo,
@@ -240,7 +233,6 @@ function ApplyButtons({
   content: string;
   pending: boolean;
   localWorkspaceConnected: boolean;
-  cliConnected: boolean;
   onDiff: (path: string, code: string) => void;
   onApplyAll: (edits: { path: string; code: string }[]) => void;
   onAddAlgo: (name: string, description: string) => void;
@@ -252,9 +244,8 @@ function ApplyButtons({
 
   if ((edits.length === 0 && algos.length === 0 && !configPatch) || pending) return null;
 
-  const writesLocally = cliConnected || localWorkspaceConnected;
-  const fileLabel = writesLocally ? "Write" : "Apply";
-  const fileCreateLabel = writesLocally ? "Create" : "Create";
+  const fileLabel = localWorkspaceConnected ? "Write locally" : "Apply";
+  const fileCreateLabel = localWorkspaceConnected ? "Create locally" : "Create";
 
   return (
     <div className="mt-3 flex flex-wrap gap-1.5">
@@ -336,18 +327,13 @@ function PostCommitRow({
   repo: string;
   onDismiss: () => void;
 }) {
-  // Empty sha means the file was written locally (CLI or File System Access) — never committed yet.
-  const wroteLocally = !result.sha;
-  const commitUrl = result.sha ? `https://github.com/${owner}/${repo}/commit/${result.sha}` : "";
-
-  const summary = result.paths.length === 1 ? result.paths[0] : `${result.paths.length} files`;
+  const commitUrl = `https://github.com/${owner}/${repo}/commit/${result.sha}`;
+  const repoUrl = `https://github.com/${owner}/${repo}`;
 
   return (
     <div className="mt-2.5 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-[11.5px] text-[var(--color-fg-dim)]">
-      <span className="text-emerald-400/80">
-        ✓ {summary} {wroteLocally ? "written to disk · live now" : "committed to GitHub"}
-      </span>
-      {!wroteLocally ? (
+      <span className="text-emerald-400/80">✓ {result.paths.length === 1 ? result.paths[0] : `${result.paths.length} files`} committed</span>
+      {result.sha ? (
         <a
           href={commitUrl}
           target="_blank"
@@ -356,12 +342,17 @@ function PostCommitRow({
         >
           View on GitHub <ExternalLink className="size-3" strokeWidth={1.5} />
         </a>
-      ) : (
-        <span className="inline-flex items-center gap-1 text-[var(--color-fg-muted)]" title="Use the Push button to commit to GitHub when ready">
-          <Rocket className="size-3" strokeWidth={1.5} />
-          Not pushed to GitHub yet
-        </span>
-      )}
+      ) : null}
+      <a
+        href={repoUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center gap-1 text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
+        title="Vercel auto-deploys when you push — connect your fork at vercel.com"
+      >
+        <Rocket className="size-3" strokeWidth={1.5} />
+        Auto-deploys on push
+      </a>
       <button type="button" onClick={onDismiss} className="ml-auto text-[var(--color-fg-dim)] hover:text-[var(--color-fg-muted)]">
         <X className="size-3.5" strokeWidth={1.5} />
       </button>
@@ -377,7 +368,6 @@ function ChatTurnSection({
   commitResults,
   githubWorkspace,
   localWorkspaceConnected,
-  cliConnected,
   onCopy,
   onDiff,
   onApplyAll,
@@ -394,7 +384,6 @@ function ChatTurnSection({
   commitResults: Map<string, CommitResult>;
   githubWorkspace: { token: string; owner: string; repo: string; branch: string };
   localWorkspaceConnected: boolean;
-  cliConnected: boolean;
   onCopy: (id: string, content: string) => void;
   onDiff: (path: string, code: string) => void;
   onApplyAll: (edits: { path: string; code: string }[]) => void;
@@ -457,7 +446,6 @@ function ChatTurnSection({
                 content={asst.content}
                 pending={pending && isLatestTurn}
                 localWorkspaceConnected={localWorkspaceConnected}
-                cliConnected={cliConnected}
                 onDiff={onDiff}
                 onApplyAll={onApplyAll}
                 onAddAlgo={onAddAlgo}
@@ -633,11 +621,6 @@ export function ChatPanel() {
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [atQuery, setAtQuery] = useState<string | null>(null);
   const [atMentionedPaths, setAtMentionedPaths] = useState<string[]>([]);
-  const [cliConnected, setCliConnected] = useState(false);
-  const [typecheckBanner, setTypecheckBanner] = useState<{
-    clean: boolean;
-    errors: Array<{ file: string; line: number; col: number; code: string; message: string }>;
-  } | null>(null);
 
   const [attachedImages, setAttachedImages] = useState<string[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -647,19 +630,6 @@ export function ChatPanel() {
   const isInitialFeedLayout = useRef(true);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // ── CLI server detection — re-check every 5 s so the badge appears as soon as
-  //    the user runs `npm start` without needing a page reload ─────────────────
-  useEffect(() => {
-    let cancelled = false;
-    const check = () =>
-      isCliServerAvailable()
-        .then((ok) => { if (!cancelled) setCliConnected(ok); })
-        .catch(() => { if (!cancelled) setCliConnected(false); });
-    check();
-    const id = setInterval(check, 5000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, []);
 
   // ── Deploy status ──────────────────────────────────────────────────
   // Deploy status polling removed — Vercel auto-deploys on push, no workflow file needed.
@@ -729,14 +699,6 @@ export function ChatPanel() {
     setDiffState({ path, code, original: "" });
     setDiffLoading(true);
     try {
-      // Prefer CLI local read (instant, no network) over GitHub REST
-      if (cliConnected) {
-        try {
-          const text = await cliReadFile(path);
-          setDiffOriginal(text);
-          return;
-        } catch { /* fall through to GitHub */ }
-      }
       if (token && owner && repo) {
         const { text } = await githubGetFileContent(token, owner, repo, branch || "main", path);
         setDiffOriginal(text);
@@ -774,7 +736,6 @@ export function ChatPanel() {
   async function handleApplyAll(edits: { path: string; code: string }[], targetMsgId?: string) {
     setApplyingPaths(edits.map((e) => e.path));
     setApplyError(null);
-    setTypecheckBanner(null);
     let lastSha = "";
     for (const edit of edits) {
       const sha = await applyOne(edit.path, edit.code, targetMsgId);
@@ -783,15 +744,6 @@ export function ChatPanel() {
     }
     setApplyingPaths([]);
     if (lastSha) void fetchDeployStatus();
-    // Poll typecheck result ~2s after apply (gives tsc watcher time to recheck)
-    if (cliConnected) {
-      window.setTimeout(async () => {
-        try {
-          const result = await cliGetTypecheckResult();
-          if (result.checkedAt) setTypecheckBanner({ clean: result.clean, errors: result.errors });
-        } catch { /* CLI may have stopped */ }
-      }, 2200);
-    }
   }
 
   // ── @ mention handling ────────────────────────────────────────────
@@ -906,26 +858,21 @@ export function ChatPanel() {
       { role: "user" as const, content: text },
     ];
 
-    // Fetch @mentioned files — prefer CLI (instant disk read) over GitHub REST
+    // Fetch @mentioned files (respects the abort signal)
     let mentionContext = "";
     if (atMentionedPaths.length > 0) {
-      const snippets: string[] = [];
-      for (const p of atMentionedPaths.slice(0, 5)) {
-        if (abort.signal.aborted) break;
-        try {
-          let fileText: string;
-          if (cliConnected) {
-            fileText = await cliReadFile(p);
-          } else {
-            const { token, owner, repo, branch } = githubWorkspace;
-            if (!token || !owner || !repo) continue;
-            const result = await githubGetFileContent(token, owner, repo, branch || "main", p);
-            fileText = result.text;
-          }
-          snippets.push(`### @${p}\n\`\`\`\n${fileText.slice(0, 4000)}\n\`\`\``);
-        } catch { /* skip */ }
+      const { token, owner, repo, branch } = githubWorkspace;
+      if (token && owner && repo) {
+        const snippets: string[] = [];
+        for (const p of atMentionedPaths.slice(0, 3)) {
+          if (abort.signal.aborted) break;
+          try {
+            const { text: fileText } = await githubGetFileContent(token, owner, repo, branch || "main", p);
+            snippets.push(`### @${p}\n\`\`\`\n${fileText.slice(0, 4000)}\n\`\`\``);
+          } catch { /* skip */ }
+        }
+        if (snippets.length) mentionContext = "\n\n## @mentioned files\n" + snippets.join("\n\n");
       }
-      if (snippets.length) mentionContext = "\n\n## @mentioned files\n" + snippets.join("\n\n");
     }
 
     // Bail out cleanly if the user stopped during the mention fetch phase
@@ -935,35 +882,6 @@ export function ChatPanel() {
       setPending(false);
       setComposerBusy(false);
       return;
-    }
-
-    // ── API grounding (CLI only) ─────────────────────────────────────
-    // Always ship the actual exports digest + src/types.ts so the LLM cannot
-    // hallucinate hooks, types, or import names. This is the single biggest
-    // fix for bad edits — without it the LLM made up useAppContext, etc.
-    let apiSurfaceContext = "";
-    if (cliConnected) {
-      try {
-        const [digest, typesSrc] = await Promise.all([
-          cliGetExportsDigest().catch(() => ({} as Record<string, string[]>)),
-          cliReadFile("src/types.ts").catch(() => ""),
-        ]);
-        const digestLines = Object.entries(digest)
-          .filter(([p]) => p.startsWith("src/"))
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([p, names]) => `- \`${p}\`: ${names.join(", ")}`)
-          .join("\n");
-        const parts: string[] = [
-          "\n\n## Real exports in this repo (authoritative — do NOT invent names)",
-          "Every symbol you import MUST appear in this list. If it doesn't, stop and ask.",
-          digestLines || "(digest empty — CLI may not have scanned yet)",
-        ];
-        if (typesSrc) {
-          parts.push("\n### Full content of `src/types.ts` (small, always shipped)");
-          parts.push("```typescript\n" + typesSrc + "\n```");
-        }
-        apiSurfaceContext = parts.join("\n");
-      } catch { /* CLI unreachable — skip */ }
     }
 
     const liveContext = buildLiveContext({
@@ -982,7 +900,6 @@ export function ChatPanel() {
       buildComposerSystemPrompt(githubWorkspace) +
       "\n\n---\n" +
       liveContext +
-      apiSurfaceContext +
       mentionContext;
 
     // ── Guaranteed status so the bubble is never empty on error ──────
@@ -1090,7 +1007,7 @@ export function ChatPanel() {
         headers["X-UNT-LLM-Authorization"] = bearer;
       }
       if (isOpenRouterBaseUrl(model.baseUrl)) {
-        headers["Referer"] = import.meta.env.VITE_OPENROUTER_REFERRER || window.location.origin || "http://127.0.0.1:58471";
+        headers["Referer"] = import.meta.env.VITE_OPENROUTER_REFERRER || window.location.origin || "http://localhost:5173";
         headers["X-Title"] = import.meta.env.VITE_OPENROUTER_APP_TITLE || "Unknown Name Trader";
       }
 
@@ -1342,7 +1259,6 @@ export function ChatPanel() {
             commitResults={commitResults}
             githubWorkspace={githubWorkspace}
             localWorkspaceConnected={localWorkspaceHandle !== null}
-            cliConnected={cliConnected}
             onCopy={copyMessage}
             onDiff={(path, code) => void openDiff(path, code)}
             onApplyAll={(edits) => void handleApplyAll(edits, turns[idx]?.assistant?.id)}
@@ -1357,32 +1273,6 @@ export function ChatPanel() {
 
       {/* ── Composer ────────────────────────────────────────────────── */}
       <div className="shrink-0 px-3 pb-3 pt-2">
-        {/* ── CLI server status ─────────────────────────────── */}
-        {cliConnected && !localWorkspaceHandle ? (
-          <div className="mb-2 flex items-center gap-2 rounded-lg border border-[color-mix(in_srgb,#2EA8FF_20%,transparent)] bg-[color-mix(in_srgb,#2EA8FF_5%,transparent)] px-3 py-1.5 text-[11px]">
-            <span className="size-1.5 shrink-0 rounded-full bg-[#2EA8FF]/80" />
-            <span className="text-[#2EA8FF]/70">SolClaw CLI connected — instant file edits active</span>
-          </div>
-        ) : null}
-
-        {/* ── Typecheck banner ──────────────────────────────── */}
-        {typecheckBanner ? (
-          <div className={`mb-2 rounded-lg border px-3 py-1.5 text-[11px] ${typecheckBanner.clean ? "border-emerald-500/20 bg-emerald-500/5 text-emerald-400/80" : "border-amber-500/25 bg-amber-500/5 text-amber-300/80"}`}>
-            <div className="flex items-center gap-2">
-              <span>{typecheckBanner.clean ? "✓ TypeScript clean after apply" : `⚠ ${typecheckBanner.errors.length} TS error${typecheckBanner.errors.length !== 1 ? "s" : ""} after apply`}</span>
-              <button type="button" onClick={() => setTypecheckBanner(null)} className="ml-auto opacity-60 hover:opacity-100">×</button>
-            </div>
-            {!typecheckBanner.clean && typecheckBanner.errors.length > 0 ? (
-              <div className="mt-1.5 space-y-0.5 font-mono text-[10px] text-amber-400/60">
-                {typecheckBanner.errors.slice(0, 3).map((e, i) => (
-                  <div key={i} className="truncate">{e.file}:{e.line} — {e.message}</div>
-                ))}
-                {typecheckBanner.errors.length > 3 ? <div>…and {typecheckBanner.errors.length - 3} more</div> : null}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-
         {/* ── Local workspace status + Push strip ─────────────── */}
         {localWorkspaceHandle ? (
           <div className="mb-2 flex items-center gap-2 rounded-lg border border-[color-mix(in_srgb,#22d3ee_20%,transparent)] bg-[color-mix(in_srgb,#22d3ee_5%,transparent)] px-3 py-1.5 text-[11px]">

@@ -156,19 +156,9 @@ export const LLM_BACKENDS: LlmBackendDefinition[] = [
     label: "Ollama (local)",
     providerLabel: "Ollama",
     baseUrl: "http://127.0.0.1:11434/v1",
-    defaultModel: "qwen2.5-coder:7b",
+    defaultModel: "llama3.2",
     fetchModelsList: true,
-    // Static fallback shown before live /v1/models loads. Covers common pulls.
-    staticModels: [
-      "qwen2.5-coder:7b",
-      "qwen2.5-coder:3b",
-      "llama3.2",
-      "llama3.1",
-      "llama3.1:8b",
-      "deepseek-coder-v2",
-      "codellama:7b",
-      "mistral",
-    ],
+    staticModels: ["llama3.2", "llama3.1", "mistral", "qwen2.5"],
   },
 ];
 
