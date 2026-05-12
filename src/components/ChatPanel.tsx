@@ -52,6 +52,11 @@ import {
   githubGetFileContent,
   type WorkflowRunStatus,
 } from "@/lib/githubApi";
+import {
+  isCliServerAvailable,
+  cliReadFile,
+  cliGetTypecheckResult,
+} from "@/lib/localWorkspace";
 import type { ChatMessage, ModelSettings } from "@/types";
 import { ChatEmptyState } from "@/components/_ChatEmptyState";
 
@@ -621,6 +626,11 @@ export function ChatPanel() {
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [atQuery, setAtQuery] = useState<string | null>(null);
   const [atMentionedPaths, setAtMentionedPaths] = useState<string[]>([]);
+  const [cliConnected, setCliConnected] = useState(false);
+  const [typecheckBanner, setTypecheckBanner] = useState<{
+    clean: boolean;
+    errors: Array<{ file: string; line: number; col: number; code: string; message: string }>;
+  } | null>(null);
 
   const [attachedImages, setAttachedImages] = useState<string[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -630,6 +640,11 @@ export function ChatPanel() {
   const isInitialFeedLayout = useRef(true);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ── CLI server detection ───────────────────────────────────────────
+  useEffect(() => {
+    isCliServerAvailable().then(setCliConnected).catch(() => setCliConnected(false));
+  }, []);
 
   // ── Deploy status ──────────────────────────────────────────────────
   // Deploy status polling removed — Vercel auto-deploys on push, no workflow file needed.
@@ -699,6 +714,14 @@ export function ChatPanel() {
     setDiffState({ path, code, original: "" });
     setDiffLoading(true);
     try {
+      // Prefer CLI local read (instant, no network) over GitHub REST
+      if (cliConnected) {
+        try {
+          const text = await cliReadFile(path);
+          setDiffOriginal(text);
+          return;
+        } catch { /* fall through to GitHub */ }
+      }
       if (token && owner && repo) {
         const { text } = await githubGetFileContent(token, owner, repo, branch || "main", path);
         setDiffOriginal(text);
@@ -736,6 +759,7 @@ export function ChatPanel() {
   async function handleApplyAll(edits: { path: string; code: string }[], targetMsgId?: string) {
     setApplyingPaths(edits.map((e) => e.path));
     setApplyError(null);
+    setTypecheckBanner(null);
     let lastSha = "";
     for (const edit of edits) {
       const sha = await applyOne(edit.path, edit.code, targetMsgId);
@@ -744,6 +768,15 @@ export function ChatPanel() {
     }
     setApplyingPaths([]);
     if (lastSha) void fetchDeployStatus();
+    // Poll typecheck result ~2s after apply (gives tsc watcher time to recheck)
+    if (cliConnected) {
+      window.setTimeout(async () => {
+        try {
+          const result = await cliGetTypecheckResult();
+          if (result.checkedAt) setTypecheckBanner({ clean: result.clean, errors: result.errors });
+        } catch { /* CLI may have stopped */ }
+      }, 2200);
+    }
   }
 
   // ── @ mention handling ────────────────────────────────────────────
@@ -858,21 +891,26 @@ export function ChatPanel() {
       { role: "user" as const, content: text },
     ];
 
-    // Fetch @mentioned files (respects the abort signal)
+    // Fetch @mentioned files — prefer CLI (instant disk read) over GitHub REST
     let mentionContext = "";
     if (atMentionedPaths.length > 0) {
-      const { token, owner, repo, branch } = githubWorkspace;
-      if (token && owner && repo) {
-        const snippets: string[] = [];
-        for (const p of atMentionedPaths.slice(0, 3)) {
-          if (abort.signal.aborted) break;
-          try {
-            const { text: fileText } = await githubGetFileContent(token, owner, repo, branch || "main", p);
-            snippets.push(`### @${p}\n\`\`\`\n${fileText.slice(0, 4000)}\n\`\`\``);
-          } catch { /* skip */ }
-        }
-        if (snippets.length) mentionContext = "\n\n## @mentioned files\n" + snippets.join("\n\n");
+      const snippets: string[] = [];
+      for (const p of atMentionedPaths.slice(0, 5)) {
+        if (abort.signal.aborted) break;
+        try {
+          let fileText: string;
+          if (cliConnected) {
+            fileText = await cliReadFile(p);
+          } else {
+            const { token, owner, repo, branch } = githubWorkspace;
+            if (!token || !owner || !repo) continue;
+            const result = await githubGetFileContent(token, owner, repo, branch || "main", p);
+            fileText = result.text;
+          }
+          snippets.push(`### @${p}\n\`\`\`\n${fileText.slice(0, 4000)}\n\`\`\``);
+        } catch { /* skip */ }
       }
+      if (snippets.length) mentionContext = "\n\n## @mentioned files\n" + snippets.join("\n\n");
     }
 
     // Bail out cleanly if the user stopped during the mention fetch phase
@@ -1007,7 +1045,7 @@ export function ChatPanel() {
         headers["X-UNT-LLM-Authorization"] = bearer;
       }
       if (isOpenRouterBaseUrl(model.baseUrl)) {
-        headers["Referer"] = import.meta.env.VITE_OPENROUTER_REFERRER || window.location.origin || "http://localhost:5173";
+        headers["Referer"] = import.meta.env.VITE_OPENROUTER_REFERRER || window.location.origin || "http://127.0.0.1:58471";
         headers["X-Title"] = import.meta.env.VITE_OPENROUTER_APP_TITLE || "Unknown Name Trader";
       }
 
@@ -1273,6 +1311,32 @@ export function ChatPanel() {
 
       {/* ── Composer ────────────────────────────────────────────────── */}
       <div className="shrink-0 px-3 pb-3 pt-2">
+        {/* ── CLI server status ─────────────────────────────── */}
+        {cliConnected && !localWorkspaceHandle ? (
+          <div className="mb-2 flex items-center gap-2 rounded-lg border border-[color-mix(in_srgb,#2EA8FF_20%,transparent)] bg-[color-mix(in_srgb,#2EA8FF_5%,transparent)] px-3 py-1.5 text-[11px]">
+            <span className="size-1.5 shrink-0 rounded-full bg-[#2EA8FF]/80" />
+            <span className="text-[#2EA8FF]/70">SolClaw CLI connected — instant file edits active</span>
+          </div>
+        ) : null}
+
+        {/* ── Typecheck banner ──────────────────────────────── */}
+        {typecheckBanner ? (
+          <div className={`mb-2 rounded-lg border px-3 py-1.5 text-[11px] ${typecheckBanner.clean ? "border-emerald-500/20 bg-emerald-500/5 text-emerald-400/80" : "border-amber-500/25 bg-amber-500/5 text-amber-300/80"}`}>
+            <div className="flex items-center gap-2">
+              <span>{typecheckBanner.clean ? "✓ TypeScript clean after apply" : `⚠ ${typecheckBanner.errors.length} TS error${typecheckBanner.errors.length !== 1 ? "s" : ""} after apply`}</span>
+              <button type="button" onClick={() => setTypecheckBanner(null)} className="ml-auto opacity-60 hover:opacity-100">×</button>
+            </div>
+            {!typecheckBanner.clean && typecheckBanner.errors.length > 0 ? (
+              <div className="mt-1.5 space-y-0.5 font-mono text-[10px] text-amber-400/60">
+                {typecheckBanner.errors.slice(0, 3).map((e, i) => (
+                  <div key={i} className="truncate">{e.file}:{e.line} — {e.message}</div>
+                ))}
+                {typecheckBanner.errors.length > 3 ? <div>…and {typecheckBanner.errors.length - 3} more</div> : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         {/* ── Local workspace status + Push strip ─────────────── */}
         {localWorkspaceHandle ? (
           <div className="mb-2 flex items-center gap-2 rounded-lg border border-[color-mix(in_srgb,#22d3ee_20%,transparent)] bg-[color-mix(in_srgb,#22d3ee_5%,transparent)] px-3 py-1.5 text-[11px]">

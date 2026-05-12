@@ -17,6 +17,7 @@
   "scripts": {
     "predev": "node scripts/bundle-workspace.mjs",
     "prebuild": "node scripts/bundle-workspace.mjs",
+    "start": "node cli/bin/solclaw.mjs start",
     "dev": "vite",
     "build": "tsc --noEmit && vite build && mkdir -p dist/aurapoints && cp public/aurapoints/* dist/aurapoints/ && cp public/index.html dist/index.html",
     "typecheck": "tsc --noEmit",

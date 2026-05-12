@@ -1,0 +1,28 @@
+{
+  "name": "solclaw",
+  "version": "0.1.0",
+  "description": "CLI launcher for SolClaw — Solana meme-coin trading terminal",
+  "type": "module",
+  "bin": {
+    "solclaw": "./bin/solclaw.mjs"
+  },
+  "files": [
+    "bin/",
+    "server/"
+  ],
+  "keywords": [
+    "solana",
+    "trading",
+    "pumpfun",
+    "memecoin",
+    "cli"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Enrichfun/solclaw"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

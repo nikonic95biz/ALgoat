@@ -137,3 +137,71 @@ export async function writeLocalFile(
   await writable.write(content);
   await writable.close();
 }
+
+// ─── CLI file API (solclaw start) ────────────────────────────────────────────
+
+const CLI_API_BASE = "http://127.0.0.1:58472";
+let _cliAvailable: boolean | null = null;
+
+/**
+ * Returns true if the SolClaw CLI file API server is running on port 58472.
+ * Result is cached for the session — the server either started before the
+ * browser tab opened or it didn't.
+ */
+export async function isCliServerAvailable(): Promise<boolean> {
+  if (_cliAvailable !== null) return _cliAvailable;
+  try {
+    const res = await fetch(`${CLI_API_BASE}/health`, {
+      signal: AbortSignal.timeout(600),
+    });
+    _cliAvailable = res.ok;
+  } catch {
+    _cliAvailable = false;
+  }
+  return _cliAvailable;
+}
+
+/** Reset cached availability (e.g. after user starts the CLI mid-session). */
+export function resetCliAvailabilityCache(): void {
+  _cliAvailable = null;
+}
+
+/** List all repo file paths via the CLI server. */
+export async function cliListFiles(): Promise<string[]> {
+  const res = await fetch(`${CLI_API_BASE}/files`);
+  if (!res.ok) throw new Error(`CLI /files failed: ${res.status}`);
+  const data = (await res.json()) as { paths: string[] };
+  return data.paths;
+}
+
+/** Read a single file's content via the CLI server. */
+export async function cliReadFile(path: string): Promise<string> {
+  const res = await fetch(`${CLI_API_BASE}/file?path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error(`CLI /file failed: ${res.status}`);
+  const data = (await res.json()) as { content: string };
+  return data.content;
+}
+
+/** Write a file via the CLI server — Vite HMR picks it up instantly. */
+export async function cliWriteFile(path: string, content: string): Promise<void> {
+  const res = await fetch(`${CLI_API_BASE}/file`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, content }),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `CLI write failed: ${res.status}`);
+  }
+}
+
+/** Fetch latest TypeScript errors from the CLI watcher. */
+export async function cliGetTypecheckResult(): Promise<{
+  clean: boolean;
+  errors: Array<{ file: string; line: number; col: number; code: string; message: string }>;
+  checkedAt: number | null;
+}> {
+  const res = await fetch(`${CLI_API_BASE}/typecheck`);
+  if (!res.ok) throw new Error(`CLI /typecheck failed: ${res.status}`);
+  return res.json();
+}
