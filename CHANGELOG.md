@@ -1,5 +1,83 @@
 # Changelog
 
+## v1.2 — 2026-05-13
+
+This release focuses on turning the AI assistant into a genuine in-browser IDE: a strict build pipeline, a chat FSM, auto-applied code edits, robust revert, and a cleaner, more purposeful UI across all panels.
+
+### AI Build Pipeline — From Assistant to IDE
+
+- **Single-pass build architecture.** The multi-round open-ended tool loop (which accumulated tokens across iterations and reliably hit Anthropic's 30 k TPM limit) is replaced by a bounded retrieve→generate pipeline. On a build request: (1) deterministic prefetch of relevant files (`list_files` → `search_code` → `read_file`, up to 3 files), (2) a single LLM call with all context in one shot, (3) response validation, (4) auto-apply.
+- **`parseBuildArtifacts`** — strict schema parser for LLM build output. Validates fenced file edits (`path:file.ts`), config patches, algo blocks, and mint blocks. Flags truncated responses, tool-trace leakage, unsafe paths, and over-wide change sets. Invalid artifacts are blocked before they touch disk.
+- **Auto-apply on build done.** Valid file edits are written to the local workspace automatically when build verification passes. No manual "Apply" button per file. A passive status message shows what was created or updated, with an optional "Show change list" dropdown.
+- **Robust revert (`AppliedFileBackup`).** Every apply operation records the previous file content. "Revert & Resend" restores files on disk before re-queuing the message — it now actually works.
+- **`MAX_TOOL_ROUNDS` removed.** No more "Build paused — say continue build" interruptions. The pipeline is bounded by design, not by a safety cap.
+- **Prompt caching removed** (`cache_control`, `makeCachedSystemBlocks`, `withCachedTools`). Simpler and cheaper for most models.
+
+### Build Flow State Machine (FSM)
+
+Explicit states now govern the entire build lifecycle:
+
+`chat` → `build_confirm_pending` → `build_running` → `build_verifying` → `build_done` | `build_failed`
+
+- `canTransitionBuildFlow` / `transitionBuildFlow` guard all state changes.
+- The chat header shows a live badge only when an active build state is in progress (`Building…`, `Verifying…`, `Build done`, `Build failed`).
+- No more double "Ready to build?" confirmations — intent classification now correctly distinguishes investigation questions from build requests.
+
+### Intent Classification
+
+Three refined classifiers for incoming messages:
+
+- **`isExplicitBuildCommand`** — direct build verbs (`build this`, `implement`, `wire up`, etc.)
+- **`isCodeInvestigationIntent`** — code questions that should not trigger build confirmation (`where is`, `how does`, `explain`, etc.)
+- **`isPotentialBuildIntent`** — softer signals for the confirm-then-build flow
+
+### LLM Provider Auto-Detection (`LlmConnectCard`)
+
+- Typing an API key auto-detects the provider (Anthropic, OpenAI, Groq, xAI, etc.) with a 350 ms debounce via `inferLlmBackendIdFromApiKey`.
+- The large provider button grid is gone. Provider name is shown inline after key detection. A subtle "change" link reveals a dropdown for manual override.
+- Model selector only appears after a key is entered (or Ollama is active) and shows models for the detected provider only.
+
+### Chat UI
+
+- **Beta lock screen.** A full-panel overlay loads on startup showing *"Work in progress — The Chat is still in Beta, code may break"* with a **Proceed** button. The chat re-locks after 3 minutes of activity and on every page load if more than 3 minutes have passed.
+- **Header cleanup.** Removed the redundant "Chat" badge and "Live" badge. The header now shows only: LLM connection status (green dot, provider, model) and the build state badge when active.
+- **Streaming sanitisation.** `stripToolTraceTags` now aggressively removes all pseudo tool-trace leakage (`<tool_call>`, `<tool_response>`, `Let me explore…`) during streaming so they never appear in the chat feed.
+- **Scroll fixes.** Auto-scroll during streaming; viewport stays at end of last message after stream completes; `End` key and `tabIndex` added to feed; user scroll-up detection prevents hijacking.
+- **Stable code fences.** `chatFenceOpenMemory` persists expanded/collapsed state across re-renders so fences do not flicker when a message updates.
+
+### Algo Lab & Blueprints
+
+- **Schema-driven knob display.** The Algo Lab blueprint detail always shows a Knobs section. If no knobs are defined, it shows *"No knobs selected yet — create your knobs in chat"* as an empty-field placeholder.
+- **Save preset confirmation.** Clicking "Save preset" flashes *"✓ Saved"* in green for 2 seconds.
+- **Idempotent algo creation.** `normalizeAlgoName` ensures no two algos with the same name (case- and whitespace-insensitive) can be created. Repeated "+ Add to Algo Lab" clicks no longer produce duplicates.
+- **Blueprint neutrality.** Removed scalper-specific default knobs from chat-generated blueprints. New algos are neutral drafts; knobs are derived from the user's described strategy, not hard-coded templates.
+
+### Trading Sidebar
+
+- **Prerequisite-gated Start button.** Paper mode requires: a runnable algo, loaded mint, open order book. Real mode additionally requires: wallet connected and PumpPortal API key. When prerequisites are missing, the button is disabled and an inline status hint explains what is needed.
+- **Vision bounce zones (default).** The Vision section in the sidebar is always visible and is now labelled *"Vision bounce zones (default)"*. When no mint is loaded, it shows guidance on how to open a token.
+
+### Performance Panel
+
+- Applied consistent `unt-section-card`, `unt-section-title`, `unt-section-overline`, and Tooltip styling to match the Trading tab visual system.
+- PnL and win-rate stats are colour-coded (green/red) based on sign.
+
+### Branding
+
+- Removed all `enrich.fun` / `Enrichfun` references across: `index.html`, `public/index.html`, `vercel.json`, `README.md`, `CHANGELOG.md`, `src/components/LandingPage.tsx`, `src/components/ReleaseNotesPage.tsx`, `src/lib/githubUpstreamDefaults.ts`.
+- All links and repo references updated to `solclaw.app` / `github.com/solclaw/solclaw`.
+
+### Bug Fixes
+
+- **Revert did not restore code.** "Revert & Resend" only truncated chat history but left disk writes in place. Fixed via `AppliedFileBackup`.
+- **Duplicate algo folders.** Repeated "Apply" or "+ Add to Algo Lab" clicks created multiple folders. Fixed by idempotent `normalizeAlgoName` in `AppContext`.
+- **Vision bounce zones always triggered LLM.** Vision calls now only happen on explicit manual refresh, never on first chart load.
+- **Build confirmation shown for investigation questions.** Resolved by `isCodeInvestigationIntent` classifier.
+- **Tool traces leaked into chat.** Aggressive `stripToolTraceTags` applied during streaming.
+- **Unused variable TypeScript errors** after UI simplification (`FilePen`, `localWorkspaceConnected`, `onDiff`, `DeployBadge`, `deployStatus`, `chatLive`, `openDiff`). Cleaned up.
+
+---
+
 ## v1.1 — 2026-05-04
 
 **Public route:** engineering changelog is browseable at **`{BASE_PATH}/changelog`** (production example: [solclaw.app/changelog](https://solclaw.app/changelog)). Implementation: `ReleaseNotesPage.tsx`, routing in `App.tsx`, `changelogPath()` in `siteUrls.ts`.

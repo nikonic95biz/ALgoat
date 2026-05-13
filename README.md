@@ -1,206 +1,175 @@
-<p align="center">
-  <img src="public/solclaw-logo.png" alt="SolClaw" width="80" />
-</p>
-
 # SolClaw
 
-**The algo trading IDE for Solana memecoins.**
+**An open-source, browser-native algo-trading IDE for Solana memecoins.**
 
-Write, test, and deploy trading algorithms directly in the browser. The AI assistant has native access to your live dashboard state, real-time order-book data, and full codebase — propose a strategy change, see the diff, commit to your fork, and watch it run. No backend, no signup, keys stay local.
-
-[![Open App](https://img.shields.io/badge/Open_App-solclaw.app-2EA8FF?style=for-the-badge)](https://solclaw.app/app)
-[![Release notes v1.1](https://img.shields.io/badge/Release_notes-v1.1-6e7782?style=for-the-badge)](https://solclaw.app/changelog)
-[![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+SolClaw is a fully client-side trading workstation. No backend, no custody, no accounts. Your keys, wallet secrets, and code never leave your browser. Everything runs on your machine — charting, order-book analysis, algo execution, and an AI assistant that can read live app state and write code directly into your local repo.
 
 ---
 
 ## What it does
 
-| Feature | Details |
-|---------|---------|
-| **In-browser IDE** | Monaco editor with the full codebase bundled — write, edit, and deploy algo logic without leaving the tab |
-| **AI assistant** | Embedded chat (Anthropic, OpenAI, Groq, OpenRouter, Mistral, Ollama, …) with live dashboard state + full codebase context. Proposes diffs, applies them, commits to your fork |
-| **Live knob control via chat** | LLM emits ` ```config ``` ` blocks — click "Apply to knobs" and scalper parameters update instantly, no redeploy |
-| **Local workspace (instant HMR)** | Connect a local folder via File System Access API; chat edits write directly to disk and Vite HMR reloads in < 100 ms |
-| **GitHub** | Fork in two clicks. Live file tree, diff preview, commit and push — built into the IDE |
-| **Bounce zone engine** | Algo-detected swing-low support levels drawn on the chart automatically. Optional LLM vision analysis (BETA) sends an offscreen chart screenshot to your AI key for visual confirmation |
-| **Nursery** | Four-tab token watcher tracking hundreds of coins around the clock — New Launches, Not So New, A Little Old, Older (zombie revival scoring) |
-| **Chart** | Live OHLC for any pump.fun mint. 1 s / 5 s / 1 m / 5 m / 15 m. Viewport lazy-loading — panning left fetches older history on demand, giving an infinite-scroll feel back to token creation |
-| **Order-book tape** | Real-time buy/sell print stream with size and market cap |
-| **Real trading** | PumpPortal Lightning API — pre-bond (bonding curve) and post-bond (Pump AMM / Raydium) with automatic pool fallback |
-| **Paper trading** | Run any algo on the live feed without spending SOL — validate before deploying capital |
-| **Performance tab** | Unified trade history — real + paper, ROI %, entry/exit MC, exit reason, Solscan / Pump.fun links |
-
-All state (keys, settings, chat history) lives in **your browser's `localStorage`**. Nothing is sent to any server this project operates.
-
-> **Latest release:** [v1.1 — 2026-05-04](./CHANGELOG.md) — bounce zone engine, 5 s charts, lazy candle loading, live knob chat control, local workspace HMR, and more.
->
-> **Public engineering changelog (same content, formatted for handoff):** [solclaw.app/changelog](https://solclaw.app/changelog)
-
----
-
-## Run locally
-
-```bash
-git clone https://github.com/<your-username>/solclaw.git
-cd solclaw
-npm install
-npm run dev
-```
-
-Open **`http://localhost:5173`** — landing page at `/`, IDE at `/app`.
-
-| Script | What it does |
-|--------|--------------|
-| `npm run dev` | Dev server + local proxies for LLM / pump.fun APIs |
-| `npm run build` | Production build → `dist/` (bundled workspace regenerated automatically) |
-| `npm run preview` | Preview the production build locally |
-
----
-
-## First-time setup
-
-Open **Setup** (key icon in the nav) and add:
-
-1. **PumpPortal API key** — [pumpportal.fun/trading-api/setup](https://pumpportal.fun/trading-api/setup). Keep ≥ 0.02 SOL in the linked wallet for the order book and real trades to work.
-2. **LLM key** — any supported provider. The app auto-detects from the key prefix (`sk-ant-` → Anthropic, `sk-or-v1-` → OpenRouter, `gsk_` → Groq, etc.).
-3. **GitHub PAT** — `public_repo` scope. Connects the IDE to your fork — live file tree, AI-proposed diffs, commit and push without leaving the app. Fork in two clicks via **Fork & connect**.
-
----
-
-## Deploy to Vercel
-
-This repo ships a `vercel.json` configured for the `/solclaw` base path (matching [solclaw.app](https://solclaw.app)).
-
-1. Import `solclaw/solclaw` at [vercel.com/new](https://vercel.com/new).
-2. Vercel picks up `vercel.json` automatically — build command, output dir, and env vars are pre-configured.
-3. Add your domain under **Settings → Domains**.
-
-### Deploying on your own domain at root (`/`)
-
-Remove the `env` block and `redirects` from `vercel.json`, then add a single catch-all rewrite:
-
-```json
-{
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
-}
-```
-
-Build will output to `dist/` and the site runs at your domain root.
-
-### GitHub Pages / Netlify / Cloudflare Pages
-
-Set `VITE_BASE_PATH` to your repo or sub-path name at build time:
-
-```bash
-VITE_BASE_PATH=solclaw npm run build   # outputs to dist/solclaw/
-```
-
-Add your host's SPA fallback to serve `index.html` for all routes under that path.
-
----
-
-## Environment variables
-
-Copy `.env.example` → `.env.local` (never commit `.env.local`). All optional — paste keys inside the app instead.
-
-| Variable | Purpose |
-|----------|---------|
-| `VITE_BASE_PATH` | Sub-path prefix (e.g. `solclaw`). Leave empty to deploy at `/`. |
-| `VITE_PUMPPORTAL_API_KEY` | Default PumpPortal key (in-app Setup overrides). |
-| `VITE_SOLANA_RPC_URL` | Custom RPC for balance / supply helpers. |
-| `VITE_GITHUB_UPSTREAM_OWNER` | Upstream GitHub owner for Setup → Fork & connect. |
-| `VITE_GITHUB_UPSTREAM_REPO` | Upstream repo name (pair with owner above). |
-| `VITE_GITHUB_REPO_URL` | Full URL shown as the "View source" link on the landing page. |
-| `VITE_DISABLE_LLM_PROXY` | Set `1` to call LLM APIs directly (skips localhost proxy). |
-| `VITE_CHAT_SIMULATE` | Set `true` for fake streaming — UI testing, no API calls. |
-
----
-
-## LLM providers supported
-
-| Provider | Key prefix | Notes |
-|----------|-----------|-------|
-| Anthropic | `sk-ant-…` | Claude 3.5 / 3 Sonnet, Haiku, Opus |
-| OpenAI | `sk-proj-…` / `sk-svcacct-…` | GPT-4o, o1, etc. |
-| Groq | `gsk_…` | Fast inference, Llama / Mixtral |
-| OpenRouter | `sk-or-v1-…` | 200+ models behind one key |
-| Mistral | — | mistral-large, codestral |
-| DeepSeek | — | deepseek-chat / reasoner |
-| xAI (Grok) | — | |
-| Google AI Studio | `AIza…` | Gemini 1.5 / 2.0 |
-| Together AI | — | Open-source model hosting |
-| Perplexity | — | |
-| Ollama (local) | No key | Point to `http://localhost:11434` |
+- **Live chart** — Pump.fun candles (1 s → 15 m) with viewport-triggered lazy loading and auto-refresh. Rendered with `lightweight-charts` v5.
+- **Order-book tape** — Real-time PumpPortal WebSocket stream of buys and sells for any token.
+- **Algo engine** — Built-in order-book scalper (paper and real). Arms on dip + bounce-zone alignment, enters on catalyst buy, exits on take-profit or sell-pressure stop.
+- **Vision bounce zones** — Algo-detected support levels auto-fire on load. AI (LLM vision) analysis is manual-triggered and BETA.
+- **Nursery** — Continuous discovery feed: new Pump.fun launches, graduation candidates, recently bonded tokens, zombie revival candidates.
+- **AI assistant** — Chat with any LLM (Anthropic, OpenAI, Groq, OpenRouter, xAI, Mistral, DeepSeek, Gemini, Ollama). The assistant sees your live trading state and can propose or apply code changes.
+- **In-browser IDE** — Monaco editor + file tree. Connect your local repo folder (File System Access API) and the AI writes code directly to disk. Vite HMR picks it up instantly.
+- **Strategy lab** — Blueprint and preset system for designing, naming, and evolving trading strategies. Paper-test before going live.
+- **Performance history** — Unified real + paper trade log with ROI, entry/exit levels, timestamps, and Solscan links.
 
 ---
 
 ## Architecture
 
 ```
-src/
-├── components/
-│   ├── LandingPage.tsx         # Marketing page (/)
-│   ├── TradingWorkspace.tsx    # IDE shell (/app)
-│   ├── AppTopChrome.tsx        # Horizontal nav + setup progress chip
-│   ├── DashboardSidebar.tsx    # Scalper controls, bounce zones, live knobs
-│   ├── DashboardViewport.tsx   # Persistent chart mount + tab switcher
-│   ├── CaChartPanel.tsx        # OHLC chart, scalper trigger, bounce line draw
-│   ├── PerformancePanel.tsx    # Unified real + paper trade history
-│   ├── NurseryPanel.tsx        # Four-tab token watcher UI
-│   ├── PumpOrderBook.tsx       # Live buy/sell tape
-│   ├── ChatPanel.tsx           # AI assistant (SSE, diff/Apply, config blocks)
-│   ├── SetupPanel.tsx          # Keys, wallet, LLM, local workspace
-│   ├── WorkspacePanel.tsx      # Monaco IDE + GitHub file ops
-│   └── Tooltip.tsx             # Portal-rendered hover tooltips
-├── context/
-│   └── AppContext.tsx          # All global state (localStorage-backed)
-├── lib/
-│   ├── nurseryEngine.ts        # Token watcher — PumpPortal WS + pump.fun REST + DexScreener
-│   ├── pumpPortalRealtime.ts   # Shared WebSocket to PumpPortal
-│   ├── scalperPaperEngine.ts   # Paper trading state machine (nearing/armed/in_trade)
-│   ├── scalperPaperConfig.ts   # Default scalper knob values
-│   ├── pumpPortalLightningTrade.ts  # Real trade execution + pool fallback (bonding/AMM/Raydium)
-│   ├── chartBounceZones.ts     # Algo bounce zone detection (ZigZag + psychological levels)
-│   ├── visionBounceDetect.ts   # LLM vision bounce detection (offscreen chart → base64 → API)
-│   ├── pumpCandles.ts          # Candle fetch, 5 s resampling, cache, lazy-load merge
-│   ├── solanaTxSolDelta.ts     # On-chain SOL delta for exact PnL (exponential backoff RPC)
-│   ├── localWorkspace.ts       # File System Access API — local folder write + IndexedDB persist
-│   ├── parseChatEdits.ts       # Parse fenced code blocks + config patches from LLM responses
-│   ├── buildChatContext.ts     # Live dashboard state → LLM context markdown
-│   ├── composerSystemPrompt.ts # System prompt (config blocks, file edits, local workspace)
-│   ├── streamAnthropic.ts      # Anthropic SSE streaming
-│   ├── githubApi.ts            # GitHub REST helpers
-│   ├── llmBackends.ts          # Provider configs + key inference
-│   └── siteUrls.ts             # Base path + route helpers
-└── types.ts
+Browser only — no server required
+───────────────────────────────────────────
+PumpPortal WS  →  live tape + order book
+Pump.fun REST  →  candles (proxied in dev)
+DexScreener    →  nursery bonded feed
+Solana RPC     →  wallet balance, token supply
+LLM providers  →  chat, code edits, vision analysis
+GitHub REST    →  read/write/fork repo files
+File System API→  local repo edits (instant HMR)
 ```
 
-Contributor and IDE-agent guide: **[AGENTS.md](./AGENTS.md)**
+State: `localStorage` + IndexedDB. No accounts, no sync, no tracking.
 
 ---
 
-## Security & privacy
+## Stack
 
-- **All keys stay in your browser.** PumpPortal key, LLM key, GitHub PAT, and wallet data are stored in `localStorage` only — never sent to any server this project operates.
-- **Trading wallet private key** (optional, for Lightning trades) is browser-only. Use a dedicated low-balance signer wallet — never your main wallet.
-- **Do not commit `.env.local`** — `.gitignore` blocks it automatically.
-- **No telemetry.** Open the network tab and verify.
+| Layer | Library |
+|---|---|
+| UI | React 19, Tailwind 4, Vite 6 |
+| Charts | `lightweight-charts` v5 |
+| Editor | Monaco (via `@monaco-editor/react`) |
+| Solana | `@solana/web3.js` |
+| LLM | Anthropic, OpenAI-compatible (any provider) |
 
 ---
 
-## Contributing
+## Getting started
 
-PRs and issues welcome.
+### 1. Clone and install
 
 ```bash
-npm run build   # must pass with zero errors (includes tsc --noEmit)
+git clone https://github.com/solclaw/solclaw
+cd solclaw
+npm install
 ```
 
-If you move or rename files, update `src/lib/projectKnowledge.ts` so the in-app assistant stays accurate. Full contributor workflow in **[AGENTS.md](./AGENTS.md)**.
+### 2. Run locally
+
+```bash
+npm run dev
+```
+
+`predev` runs `scripts/bundle-workspace.mjs` first, which snapshots your repo into `public/bundled-workspace/` so the in-browser IDE can read files without a GitHub token.
+
+Open [http://localhost:5173](http://localhost:5173).
+
+### 3. Setup (in-app)
+
+Open the **⚙ Setup** panel (top-right gear icon) and configure:
+
+| Step | What to add |
+|---|---|
+| **LLM** | Paste any API key — provider is detected automatically from the key shape |
+| **PumpPortal** | API key from [pumpportal.fun](https://pumpportal.fun) (optional, enables real trading) |
+| **Trading wallet** | Solana private key for real-money execution (stays in browser only) |
+| **GitHub** | PAT + owner/repo for pushing AI code edits to a fork |
+| **Local workspace** | Connect your local SolClaw repo folder for instant disk writes |
+
+---
+
+## Trading modes
+
+### Paper trading
+No real money. Uses the same scalper engine, tape, and bounce zones as real mode. PnL shown as market-cap % move and optional SOL estimate.
+
+### Real trading
+Requires PumpPortal API key + trading wallet. Buys and sells via **PumpPortal Lightning** with automatic pool fallback (bonding curve → Raydium). SOL PnL parsed from Solana RPC.
+
+---
+
+## AI assistant (chat)
+
+The chat panel is a full-context LLM interface. It receives:
+- Live trading state (mint, mode, algo, scalper snapshot, bounce zones)
+- Open file content (if workspace connected)
+- Strategy blueprints and preset knobs
+
+It can respond with:
+- ```` ```typescript:src/path/file.ts ```` blocks → auto-applied to disk in build mode
+- ```` ```config ```` blocks → live knob updates (no redeploy)
+- ```` ```algo ```` blocks → adds a new preset to Algo Lab
+- Follow-up suggestions, blueprint drafts, and trading analysis
+
+### Build mode
+When building, the assistant operates in a strict single-pass pipeline:
+1. Deterministic prefetch of relevant files (list, search, read up to 3 files)
+2. Single LLM call — no open-ended tool loops
+3. Response is validated against a build artifact schema
+4. Valid file edits auto-apply to disk; invalid/truncated responses are blocked
+
+Build flow is managed by an explicit state machine: `chat → build_running → build_verifying → build_done / build_failed`.
+
+---
+
+## Algo Lab
+
+Design, parameterise, and iterate on trading strategies:
+- **Blueprint** — goal, market, signals, entry/exit/risk rules, knobs
+- **Preset** — named config snapshot (knobs) for a strategy
+- **Paper test** — run any preset against live tape in paper mode
+- **Performance tab** — review closed trades, win rate, PnL
+
+Built-in strategy: **Order-book scalper**. Register new strategies in `src/lib/strategyRegistry.ts`.
+
+---
+
+## Discovery (Nursery)
+
+Four real-time feeds of Pump.fun tokens:
+- **New launches** — all pre-bond pairs, newest first
+- **Graduating** — pre-bond tokens sorted by bonding-curve progress
+- **Recently bonded** — tokens that just graduated to Raydium (< 2 days)
+- **Older revivals** — graduated tokens 2–30 days old sorted by revival score
+
+Each token flows into `DiscoveryBus` (IndexedDB-backed) with tier scoring. Clicking any token opens its chart. The discovery bus is wired for multi-mint strategy subscriptions — groundwork for auto-discovery algo execution.
+
+---
+
+## Deploy
+
+```bash
+npm run build
+```
+
+Output: `dist/`. Deploy to any static host.
+
+**Vercel** (recommended):
+1. Import this repo in [vercel.com/new](https://vercel.com/new)
+2. Build command: `npm run build`
+3. Output directory: `dist`
+4. Set environment variables in `vercel.json` or Vercel dashboard if needed
+
+---
+
+## Development notes
+
+### LLM proxy
+In dev, `vite.config.ts` proxies all provider endpoints under `/__proxy/llm/*` so `Authorization` headers reach providers without CORS issues. On deployed builds, requests go directly from the browser — configure CORS in your provider dashboard or use OpenRouter as a proxy.
+
+### Adding a strategy
+1. Add a `StrategyRuntimeDefinition` and `StrategyRuntime` implementation in `src/lib/`
+2. Register it in `STRATEGY_REGISTRY` and `STRATEGY_RUNTIME_REGISTRY` in `src/lib/strategyRegistry.ts`
+3. Wire it in `DashboardSidebar` and `AlgoTabs` alongside the built-in scalper
 
 ---
 
 ## License
 
-[MIT](./LICENSE) — free to fork, modify, and deploy.
+MIT — see `LICENSE`.
