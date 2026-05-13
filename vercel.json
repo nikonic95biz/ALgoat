@@ -4,9 +4,9 @@
   "framework": "vite",
   "env": {
     "VITE_BASE_PATH": "algoat",
-    "VITE_GITHUB_REPO_URL": "https://github.com/algoat/algoat",
-    "VITE_GITHUB_UPSTREAM_OWNER": "algoat",
-    "VITE_GITHUB_UPSTREAM_REPO": "algoat"
+    "VITE_GITHUB_REPO_URL": "https://github.com/ALgoatorg/ALgoat",
+    "VITE_GITHUB_UPSTREAM_OWNER": "ALgoatorg",
+    "VITE_GITHUB_UPSTREAM_REPO": "ALgoat"
   },
   "rewrites": [
     { "source": "/", "destination": "/index.html" },

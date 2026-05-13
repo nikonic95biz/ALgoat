@@ -56,7 +56,7 @@ function NavBar({
             Release notes
           </a>
           <a
-            href={GH || "https://github.com/algoat/algoat"}
+            href={GH || "https://github.com/ALgoatorg/ALgoat"}
             target="_blank"
             rel="noreferrer"
             className="group inline-flex items-center gap-1.5 rounded-lg bg-[#2EA8FF] px-3.5 py-2 text-[13px] font-semibold text-[#040d18] shadow-[0_0_24px_rgba(46,168,255,0.22)] transition-[filter,transform] hover:brightness-110 active:scale-[0.98]"
@@ -95,7 +95,7 @@ function Hero() {
 
           <div className="mt-9 flex flex-wrap items-center gap-3">
             <a
-              href={GH || "https://github.com/algoat/algoat"}
+              href={GH || "https://github.com/ALgoatorg/ALgoat"}
               target="_blank"
               rel="noreferrer"
               className="group inline-flex items-center gap-2 rounded-xl bg-[#2EA8FF] px-6 py-3.5 text-[15px] font-semibold text-[#040d18] shadow-[0_0_40px_rgba(46,168,255,0.25)] transition-[filter,transform] hover:brightness-110 active:scale-[0.99]"
@@ -338,7 +338,7 @@ function Footer({
           </p>
           <div className="mt-7 flex flex-wrap justify-center gap-3">
             <a
-              href={GH || "https://github.com/algoat/algoat"}
+              href={GH || "https://github.com/ALgoatorg/ALgoat"}
               target="_blank"
               rel="noreferrer"
               className="group inline-flex items-center gap-2 rounded-xl bg-[#2EA8FF] px-6 py-3.5 text-[15px] font-semibold text-[#040d18] shadow-[0_0_40px_rgba(46,168,255,0.25)] transition-[filter,transform] hover:brightness-110 active:scale-[0.99]"

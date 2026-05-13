@@ -269,7 +269,7 @@ export function ReleaseNotesPage({
           </p>
           <div className="mt-5 flex flex-wrap gap-3">
             <a
-              href={GH || "https://github.com/algoat/algoat"}
+              href={GH || "https://github.com/ALgoatorg/ALgoat"}
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center gap-2 rounded-lg bg-[#2EA8FF] px-4 py-2.5 text-[13px] font-semibold text-[#040d18]"
