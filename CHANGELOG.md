@@ -2,7 +2,7 @@
 
 ## v1.1 — 2026-05-04
 
-**Public route:** engineering changelog is browseable at **`{BASE_PATH}/changelog`** (production example: [enrich.fun/solclaw/changelog](https://enrich.fun/solclaw/changelog)). Implementation: `ReleaseNotesPage.tsx`, routing in `App.tsx`, `changelogPath()` in `siteUrls.ts`.
+**Public route:** engineering changelog is browseable at **`{BASE_PATH}/changelog`** (production example: [solclaw.app/changelog](https://solclaw.app/changelog)). Implementation: `ReleaseNotesPage.tsx`, routing in `App.tsx`, `changelogPath()` in `siteUrls.ts`.
 
 ### Bounce Zone Engine
 

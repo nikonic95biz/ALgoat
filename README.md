@@ -8,8 +8,8 @@
 
 Write, test, and deploy trading algorithms directly in the browser. The AI assistant has native access to your live dashboard state, real-time order-book data, and full codebase — propose a strategy change, see the diff, commit to your fork, and watch it run. No backend, no signup, keys stay local.
 
-[![Open App](https://img.shields.io/badge/Open_App-enrich.fun-2EA8FF?style=for-the-badge)](https://enrich.fun/solclaw/app)
-[![Release notes v1.1](https://img.shields.io/badge/Release_notes-v1.1-6e7782?style=for-the-badge)](https://enrich.fun/solclaw/changelog)
+[![Open App](https://img.shields.io/badge/Open_App-solclaw.app-2EA8FF?style=for-the-badge)](https://solclaw.app/app)
+[![Release notes v1.1](https://img.shields.io/badge/Release_notes-v1.1-6e7782?style=for-the-badge)](https://solclaw.app/changelog)
 [![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 ---
@@ -35,7 +35,7 @@ All state (keys, settings, chat history) lives in **your browser's `localStorage
 
 > **Latest release:** [v1.1 — 2026-05-04](./CHANGELOG.md) — bounce zone engine, 5 s charts, lazy candle loading, live knob chat control, local workspace HMR, and more.
 >
-> **Public engineering changelog (same content, formatted for handoff):** [enrich.fun/solclaw/changelog](https://enrich.fun/solclaw/changelog)
+> **Public engineering changelog (same content, formatted for handoff):** [solclaw.app/changelog](https://solclaw.app/changelog)
 
 ---
 
@@ -70,9 +70,9 @@ Open **Setup** (key icon in the nav) and add:
 
 ## Deploy to Vercel
 
-This repo ships a `vercel.json` configured for the `/solclaw` base path (matching [enrich.fun/solclaw](https://enrich.fun/solclaw)).
+This repo ships a `vercel.json` configured for the `/solclaw` base path (matching [solclaw.app](https://solclaw.app)).
 
-1. Import `Enrichfun/solclaw` at [vercel.com/new](https://vercel.com/new).
+1. Import `solclaw/solclaw` at [vercel.com/new](https://vercel.com/new).
 2. Vercel picks up `vercel.json` automatically — build command, output dir, and env vars are pre-configured.
 3. Add your domain under **Settings → Domains**.
 

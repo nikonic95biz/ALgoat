@@ -886,38 +886,7 @@ function AtMentionDropdown({
 
 // ─── Deploy status badge ──────────────────────────────────────────────────────
 
-function DeployBadge({ run }: { run: WorkflowRunStatus | null | undefined }) {
-  if (!run) return null;
-
-  let color = "bg-[var(--color-fg-dim)]";
-  let title = "Deploy: unknown";
-  let animate = false;
-
-  if (run.status === "in_progress" || run.status === "queued") {
-    color = "bg-amber-400";
-    title = "Deploy in progress…";
-    animate = true;
-  } else if (run.conclusion === "success") {
-    color = "bg-emerald-400";
-    title = "Last deploy: success";
-  } else if (run.conclusion === "failure" || run.conclusion === "cancelled") {
-    color = "bg-red-400";
-    title = `Last deploy: ${run.conclusion}`;
-  }
-
-  return (
-    <a
-      href={run.html_url || undefined}
-      target="_blank"
-      rel="noreferrer"
-      title={title}
-      className="flex items-center gap-1.5 text-[10.5px] text-[var(--color-fg-dim)] hover:text-[var(--color-fg-muted)]"
-    >
-      <span className={`size-1.5 rounded-full ${color} ${animate ? "animate-pulse" : ""}`} />
-      {run.status === "in_progress" || run.status === "queued" ? "deploying" : run.conclusion ?? ""}
-    </a>
-  );
-}
+// DeployBadge removed — deploy status no longer shown in chat header
 
 // ─── Model footer bar ────────────────────────────────────────────────────────
 function ModelFooterBar({
@@ -1041,7 +1010,7 @@ export function ChatPanel() {
   const [diffState, setDiffState] = useState<DiffState>(null);
   const [diffOriginal, setDiffOriginal] = useState<string | null>(null);
   const [diffLoading] = useState(false);
-  const [deployStatus] = useState<WorkflowRunStatus | null | undefined>(undefined);
+  void useState<WorkflowRunStatus | null | undefined>(undefined); // deployStatus removed — no longer shown in header
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [atQuery, setAtQuery] = useState<string | null>(null);
   const [atMentionedPaths, setAtMentionedPaths] = useState<string[]>([]);
@@ -1054,7 +1023,7 @@ export function ChatPanel() {
 
   const [attachedImages, setAttachedImages] = useState<string[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
-  const chatLive = Boolean(localWorkspaceHandle && workspaceReady && localIdeAgentReady);
+  void Boolean(localWorkspaceHandle && workspaceReady && localIdeAgentReady); // chatLive badge removed from header
 
   const abortRef = useRef<AbortController | null>(null);
   const buildFlowStateRef = useRef<BuildFlowState>("chat");
@@ -2105,55 +2074,39 @@ export function ChatPanel() {
       >
         <div className="min-w-0 flex-1">
           <h2 className="unt-section-title">Algo assistant</h2>
-          <div className="mt-1 flex items-center gap-2">
+          {/* LLM connection status line */}
+          <div className="mt-0.5 flex items-center gap-1.5">
+            <span
+              className={"size-1.5 shrink-0 rounded-full " + (model.apiKey.trim() ? "bg-emerald-400" : "bg-[var(--color-fg-dim)]")}
+              title={model.apiKey.trim() ? "LLM connected" : "No API key — add one below"}
+            />
             <p className="truncate font-mono text-[10px] leading-snug text-[var(--color-fg-dim)]" title={`${model.providerLabel} · ${model.model}`}>
-              {model.providerLabel} · {model.model}
+              {model.apiKey.trim() ? `${model.providerLabel} · ${model.model}` : "Not connected — paste API key below"}
             </p>
-            <DeployBadge run={deployStatus} />
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <span
-            className={
-              "mr-1 rounded-lg border px-2.5 py-1 text-[10px] font-semibold " +
-              (buildFlowState === "build_running" || buildFlowState === "build_verifying"
-                ? "border-amber-500/25 bg-amber-500/10 text-amber-300/85"
-                : buildFlowState === "build_done"
-                  ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300/85"
-                  : buildFlowState === "build_failed"
-                    ? "border-red-500/30 bg-red-500/10 text-red-300/85"
-                    : buildFlowState === "build_confirm_pending"
-                      ? "border-cyan-500/25 bg-cyan-500/10 text-cyan-300/85"
-                      : "border-[var(--color-border-subtle)] bg-[var(--color-fill)] text-[var(--color-fg-muted)]")
-            }
-            title="Build flow state machine"
-          >
-            {buildFlowState === "build_running" && "Build running"}
-            {buildFlowState === "build_verifying" && "Verifying"}
-            {buildFlowState === "build_done" && "Build done"}
-            {buildFlowState === "build_failed" && "Build failed"}
-            {buildFlowState === "build_confirm_pending" && "Awaiting build confirm"}
-            {buildFlowState === "chat" && "Chat"}
-          </span>
-          <div className="mr-1 rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-fill)] px-2.5 py-1 text-[10px] font-semibold text-[var(--color-fg-muted)]">
-            Chat
-          </div>
-          <span
-            title={
-              chatLive
-                ? "Live: local workspace and IDE agent are connected"
-                : "Not live: reconnect workspace or local IDE agent"
-            }
-            className={
-              "inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-semibold " +
-              (chatLive
-                ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300/85"
-                : "border-[var(--color-border-subtle)] bg-[var(--color-fill)] text-[var(--color-fg-dim)]")
-            }
-          >
-            <span className={"size-1.5 rounded-full " + (chatLive ? "bg-emerald-400" : "bg-[var(--color-fg-dim)]")} />
-            {chatLive ? "Live" : "Not live"}
-          </span>
+          {/* Build state — only shown when active */}
+          {buildFlowState !== "chat" && (
+            <span
+              className={
+                "mr-1 rounded-lg border px-2.5 py-1 text-[10px] font-semibold " +
+                (buildFlowState === "build_running" || buildFlowState === "build_verifying"
+                  ? "border-amber-500/25 bg-amber-500/10 text-amber-300/85"
+                  : buildFlowState === "build_done"
+                    ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300/85"
+                    : buildFlowState === "build_failed"
+                      ? "border-red-500/30 bg-red-500/10 text-red-300/85"
+                      : "border-cyan-500/25 bg-cyan-500/10 text-cyan-300/85")
+              }
+            >
+              {buildFlowState === "build_running" && "Building…"}
+              {buildFlowState === "build_verifying" && "Verifying…"}
+              {buildFlowState === "build_done" && "Build done"}
+              {buildFlowState === "build_failed" && "Build failed"}
+              {buildFlowState === "build_confirm_pending" && "Confirm build?"}
+            </span>
+          )}
           {activeSession?.modelOverride ? (
             <button
               type="button"
@@ -2161,7 +2114,7 @@ export function ChatPanel() {
               onClick={() => clearSessionModel(activeChatId)}
               className="rounded-lg px-2 py-1.5 text-[10px] text-amber-400/70 hover:bg-[var(--color-fill)] hover:text-amber-400"
             >
-              custom model ×
+              custom ×
             </button>
           ) : null}
           {localIdeAgentReady ? (
@@ -2172,7 +2125,7 @@ export function ChatPanel() {
               disabled={rollbackBusy}
               className="rounded-lg px-2 py-1.5 text-[10px] text-[var(--color-fg-dim)] hover:bg-[var(--color-fill)] hover:text-[var(--color-fg-muted)] disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {rollbackBusy ? "rolling..." : "rollback"}
+              {rollbackBusy ? "rolling…" : "rollback"}
             </button>
           ) : null}
           <button type="button" title="Clear conversation" onClick={clearChat} className="rounded-lg p-2 text-[var(--color-fg-dim)] hover:bg-[var(--color-fill)] hover:text-[var(--color-fg-muted)]">
