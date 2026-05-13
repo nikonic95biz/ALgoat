@@ -187,4 +187,4 @@ In dev, `vite.config.ts` proxies all LLM provider requests under `/__proxy/llm/*
 
 ## License
 
-MIT — see `LICENSE`.
+GNU AGPL v3 — see `LICENSE`.

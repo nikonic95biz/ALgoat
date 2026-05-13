@@ -106,7 +106,7 @@ function Hero() {
           </div>
 
           <div className="mt-10 grid grid-cols-3 gap-5 border-t border-white/[0.06] pt-8 max-w-sm">
-            <Stat n="MIT" label="open source" />
+            <Stat n="AGPLv3" label="open source" />
             <Stat n="0" label="servers required" />
             <Stat n="100%" label="self-hosted" />
           </div>
@@ -352,7 +352,7 @@ function Footer({
         <div className="mt-10 flex flex-col items-center justify-between gap-4 text-[12px] text-[#3a4050] sm:flex-row">
           <p className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
             <span className="flex items-center gap-1.5">
-              <img src="/algoat-logo.png" alt="" className="h-3.5 w-3.5 rounded-full object-cover" /> ALgoat · Open source · MIT · Nothing here is financial advice.
+              <img src="/algoat-logo.png" alt="" className="h-3.5 w-3.5 rounded-full object-cover" /> ALgoat · Open source · AGPLv3 · Nothing here is financial advice.
             </span>
             <a href={changelogHref} className="font-mono text-[#2EA8FF]/80 underline-offset-2 hover:text-[#2EA8FF] hover:underline">
               Release notes (v1.1)
