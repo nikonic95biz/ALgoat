@@ -181,11 +181,14 @@ export async function listLocalFiles(
 ): Promise<string[]> {
   const out: string[] = [];
 
+  type DirHandleWithValues = FileSystemDirectoryHandle & {
+    values(): AsyncIterableIterator<FileSystemHandle>;
+  };
+
   async function walk(handle: FileSystemDirectoryHandle, prefix: string): Promise<void> {
     if (out.length >= maxFiles) return;
-    // values() is async iterable in the File System Access API
-    const entries = handle as unknown as AsyncIterable<FileSystemHandle>;
-    for await (const entry of entries) {
+    const iter = (handle as DirHandleWithValues).values();
+    for await (const entry of iter) {
       if (out.length >= maxFiles) return;
       if (entry.kind === "directory") {
         if (SKIP_DIRS.has(entry.name)) continue;
@@ -201,11 +204,8 @@ export async function listLocalFiles(
     }
   }
 
-  try {
-    await walk(dirHandle, "");
-  } catch {
-    /* permission may have lapsed — return what we got */
-  }
+  // Let errors propagate so callers know something went wrong (permission, etc.)
+  await walk(dirHandle, "");
   return out.sort();
 }
 

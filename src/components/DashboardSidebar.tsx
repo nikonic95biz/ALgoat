@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-// useState is used by BounceZonesEditor and ZoneRow below
+import { useEffect, useMemo, useState } from "react";
 import { BotTradesBook } from "@/components/BotTradesBook";
 import { InlineToolbarPicker } from "@/components/InlineToolbarPicker";
 import { StreamHealthBanner } from "@/components/StreamHealthBanner";
@@ -21,8 +20,9 @@ import {
 } from "@/lib/scalperPaperEngine";
 import { SetupPanel } from "@/components/SetupPanel";
 import { WorkspacePanel } from "@/components/WorkspacePanel";
-import { PerformancePanel } from "@/components/PerformancePanel";
+import { AlgoTabs, type AlgoTab } from "@/components/AlgoTabs";
 import { TrainingDataPanel } from "@/components/TrainingDataPanel";
+import { PerformancePanel } from "@/components/PerformancePanel";
 import { usePumpPortalConfigRevision } from "@/hooks/usePumpPortalConfigRevision";
 
 /** Empty BotTradesBook copy follows engine phase — exit wording only once you're in a trade. */
@@ -58,8 +58,6 @@ export function DashboardSidebar() {
   const { sidebarMode } = useApp();
   if (sidebarMode === "analytics") return <AnalyticsPanel />;
   if (sidebarMode === "code") return <WorkspacePanel />;
-  if (sidebarMode === "performance") return <div className="p-4"><PerformancePanel /></div>;
-  if (sidebarMode === "training") return <div className="p-4"><TrainingDataPanel /></div>;
   return <SetupPanel />;
 }
 
@@ -68,12 +66,15 @@ function AnalyticsPanel() {
     selectedAlgoId,
     setSelectedAlgoId,
     userAlgos,
+    algoBlueprints,
+    focusedAlgoLabPresetId,
     chartAnalytics,
     tradingMode,
     setTradingMode,
     algoSessionActive,
     setAlgoSessionActive,
     setTradingHalted,
+    startTradingSessionRecord,
     hardStopTrading,
     scalperLiveBuySol,
     setScalperLiveBuySol,
@@ -85,6 +86,9 @@ function AnalyticsPanel() {
   const tradingWalletPk = useMemo(() => getPumpPortalTradingWalletPubkey(), [pumpCfgRev]);
 
   const [tradingNotice, setTradingNotice] = useState<string | null>(null);
+  const [namingSessionOpen, setNamingSessionOpen] = useState(false);
+  const [sessionNameDraft, setSessionNameDraft] = useState("");
+  const [activeAlgoTab, setActiveAlgoTab] = useState<AlgoTab>("trading");
   useEffect(() => {
     if (!tradingNotice) return;
     const tick = window.setTimeout(() => setTradingNotice(null), 5200);
@@ -93,10 +97,15 @@ function AnalyticsPanel() {
 
   useEffect(() => {
     if (!algoSessionActive) return;
-    if (selectedAlgoId !== BUILTIN_SCALPER_PRESET_ID) {
+    const selectedUser = userAlgos.find((a) => a.id === selectedAlgoId);
+    if (selectedAlgoId !== BUILTIN_SCALPER_PRESET_ID && selectedUser?.strategyId !== BUILTIN_SCALPER_PRESET_ID) {
       setAlgoSessionActive(false);
     }
-  }, [algoSessionActive, selectedAlgoId, setAlgoSessionActive]);
+  }, [algoSessionActive, selectedAlgoId, setAlgoSessionActive, userAlgos]);
+
+  useEffect(() => {
+    if (focusedAlgoLabPresetId) setActiveAlgoTab("lab");
+  }, [focusedAlgoLabPresetId]);
 
   const presetGroups = useMemo(() => {
     const builtin = {
@@ -111,11 +120,23 @@ function AnalyticsPanel() {
   }, [userAlgos]);
 
   const selectedUser = userAlgos.find((a) => a.id === selectedAlgoId);
-  const canRunBundledScalper = selectedAlgoId === BUILTIN_SCALPER_PRESET_ID;
+  const selectedBlueprint = algoBlueprints.find((b) => b.implementation.presetId === selectedAlgoId);
+  const canRunBundledScalper =
+    selectedAlgoId === BUILTIN_SCALPER_PRESET_ID ||
+    selectedUser?.strategyId === BUILTIN_SCALPER_PRESET_ID;
+  const selectedIsRunnable = selectedAlgoId === BUILTIN_SCALPER_PRESET_ID || Boolean(selectedBlueprint?.implementation.runnable);
+  const selectedConfig = selectedUser?.config ?? scalperUserConfig;
+  const selectedPresetName = selectedUser?.name ?? "Order-book scalper";
   const scalperEngineActive =
     algoSessionActive &&
     (tradingMode === "paper" || tradingMode === "real") &&
-    selectedAlgoId === BUILTIN_SCALPER_PRESET_ID;
+    canRunBundledScalper;
+  const hasMint = Boolean(chartAnalytics.mint);
+  const hasOrderBookReady = chartAnalytics.orderBookConn === "open";
+  const canPaperStart = selectedIsRunnable && canRunBundledScalper && hasMint && hasOrderBookReady;
+  const hasTradingWallet = Boolean(tradingWalletPk);
+  const hasPumpKey = Boolean(getEffectivePumpPortalApiKey().trim());
+  const canRealStart = canPaperStart && hasTradingWallet && hasPumpKey;
 
   const presetPickerDisplay = scalperEngineActive
     ? tradingMode === "real"
@@ -128,18 +149,70 @@ function AnalyticsPanel() {
   const sessionStripError =
     tradingMode === "real" && algoSessionActive && chartAnalytics.livePumpPortalLastErr;
 
+  const defaultSessionName = () =>
+    `Trading session ${new Date().toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`;
+
+  const startNamedSession = (nameInput: string) => {
+    if (!canRunBundledScalper || !selectedIsRunnable || !chartAnalytics.mint) return;
+    if (chartAnalytics.orderBookConn !== "open") {
+      setTradingNotice("Order book stream is not ready. Open the chart/order book feed first.");
+      return;
+    }
+    if (tradingMode === "real" && !getEffectivePumpPortalApiKey().trim()) {
+      setTradingNotice(
+        appendPumpPortalTradingWalletHint(
+          "PumpPortal API key missing — add it in Setup.",
+        ),
+      );
+      return;
+    }
+    if (tradingMode === "real" && !getPumpPortalTradingWalletPubkey()) {
+      setTradingNotice("Trading wallet missing. Add wallet secret in Setup before starting real trading.");
+      return;
+    }
+    const name = nameInput.trim();
+    if (!name) return;
+    startTradingSessionRecord({
+      name,
+      mode: tradingMode,
+      strategyId: BUILTIN_SCALPER_PRESET_ID,
+      presetId: selectedAlgoId ?? BUILTIN_SCALPER_PRESET_ID,
+      presetName: selectedPresetName,
+      mint: chartAnalytics.mint,
+      walletPk: getPumpPortalTradingWalletPubkey(),
+      configSnapshot: selectedConfig,
+      liveBuySol: scalperLiveBuySol,
+      startSnapshot: {
+        tapeSampleSize: chartAnalytics.tapeSummary?.sampleSize ?? 0,
+        latestMcUsd: chartAnalytics.tapeSummary?.latestMcUsd ?? null,
+        orderBookConn: chartAnalytics.orderBookConn,
+        orderBookLastTradeAt: chartAnalytics.orderBookLastTradeAt,
+      },
+    });
+    setTradingHalted(false);
+    setAlgoSessionActive(true);
+    setNamingSessionOpen(false);
+    setTradingNotice("Session saved. Trading started.");
+  };
+
   return (
     <div
       className="flex h-full min-w-0 flex-col overflow-hidden"
       style={{ background: "var(--color-bg-sideBar)" }}
     >
+      <AlgoTabs
+        activeTab={activeAlgoTab}
+        onTabChange={setActiveAlgoTab}
+        algoLabPanel={<div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden unt-panel-inner"><TrainingDataPanel /></div>}
+        performancePanel={<div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden unt-panel-inner"><PerformancePanel /></div>}
+      >
       <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden unt-panel-inner">
         <section className="unt-section-card space-y-4">
-          <div>
+          <div className="flex items-center gap-2">
             <h2 className="unt-section-title">Algo trading</h2>
-            <p className="unt-help-text mt-2">
-              Pick a bot below and hit Start. Need something custom? Ask chat.
-            </p>
+            <Tooltip text="Pick a preset, name the run, then start a paper or real session." side="right">
+              <span className="grid size-4 cursor-help place-items-center rounded-full border border-[var(--color-border-subtle)] text-[10px] text-[var(--color-fg-dim)]">?</span>
+            </Tooltip>
           </div>
           <div className="space-y-3 border-t border-[var(--color-border-subtle)] pt-4">
             <label className="unt-field-label" htmlFor="ca-preset-trigger">
@@ -182,12 +255,18 @@ function AnalyticsPanel() {
               </div>
             ) : selectedAlgoId != null ? (
               <div className="mt-3 space-y-2 border-t border-[var(--color-border-subtle)] pt-3">
-                <h3 className="unt-section-overline">Algo details</h3>
-                {userAlgoDescription ? (
-                  <p className="unt-body-text text-[var(--color-fg-muted)]">{userAlgoDescription}</p>
-                ) : (
-                  <p className="unt-help-text">No description on this preset yet — you can add one when saving from chat.</p>
-                )}
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="unt-section-overline mb-0">{selectedPresetName}</h3>
+                  <span className="rounded border border-[var(--color-border-subtle)] px-1.5 py-0.5 text-[10px] text-[var(--color-fg-dim)]">
+                    {selectedIsRunnable ? "Runnable" : "Draft"}
+                  </span>
+                </div>
+                {userAlgoDescription ? <p className="unt-body-text text-[var(--color-fg-muted)]">{userAlgoDescription}</p> : null}
+                {!selectedIsRunnable ? (
+                  <p className="unt-help-text text-amber-300/80">
+                    This preset is an Algo Lab draft. Build and verify its engine before starting a Trading session.
+                  </p>
+                ) : null}
               </div>
             ) : (
               <p className="unt-help-text mt-3 border-t border-[var(--color-border-subtle)] pt-3">
@@ -233,6 +312,9 @@ function AnalyticsPanel() {
             ) : null}
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="unt-section-overline mb-0">Trading session</h3>
+              <Tooltip text="Every run is saved with its name, preset, mint, knobs, tape snapshot, and closed trades." side="top">
+                <span className="grid size-4 cursor-help place-items-center rounded-full border border-[var(--color-border-subtle)] text-[10px] text-[var(--color-fg-dim)]">?</span>
+              </Tooltip>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Tooltip text="Paper = practice, no real money. Real = real buys and sells using your wallet and PumpPortal." side="top">
@@ -256,6 +338,16 @@ function AnalyticsPanel() {
                 <option value="real">Real trading</option>
               </select>
               </Tooltip>
+              {!algoSessionActive && tradingMode === "real" && (!hasTradingWallet || !hasPumpKey) ? (
+                <span className="text-[11px] text-amber-300/85">
+                  Real mode needs wallet + PumpPortal key.
+                </span>
+              ) : null}
+              {!algoSessionActive && !hasOrderBookReady ? (
+                <span className="text-[11px] text-[var(--color-fg-dim)]">
+                  Waiting for order book stream.
+                </span>
+              ) : null}
               {algoSessionActive ? (
                 <span
                   className={
@@ -274,8 +366,10 @@ function AnalyticsPanel() {
                 text={
                   algoSessionActive
                     ? "Stop the current trading session immediately"
-                    : !canRunBundledScalper
-                      ? "Pick the built-in scalper first"
+                    : !selectedIsRunnable
+                      ? "This preset is still an Algo Lab draft"
+                      : !canRunBundledScalper
+                        ? "This preset does not have a runnable trading engine yet"
                       : !chartAnalytics.mint
                         ? "Paste a token CA in the Chart tab first"
                         : tradingMode === "real"
@@ -287,23 +381,15 @@ function AnalyticsPanel() {
               <button
                 type="button"
                 className="unt-btn-primary shrink-0 px-4 py-2 text-[13px] font-medium"
-                disabled={!algoSessionActive && (!canRunBundledScalper || !chartAnalytics.mint)}
+                disabled={!algoSessionActive && (tradingMode === "real" ? !canRealStart : !canPaperStart)}
                 onClick={() => {
                   if (algoSessionActive) {
                     hardStopTrading();
+                    setNamingSessionOpen(false);
                     return;
                   }
-                  if (!canRunBundledScalper || !chartAnalytics.mint) return;
-                  if (tradingMode === "real" && !getEffectivePumpPortalApiKey().trim()) {
-                    setTradingNotice(
-                      appendPumpPortalTradingWalletHint(
-                        "PumpPortal API key missing — add it in Setup.",
-                      ),
-                    );
-                    return;
-                  }
-                  setTradingHalted(false);
-                  setAlgoSessionActive(true);
+                  setSessionNameDraft(defaultSessionName());
+                  setNamingSessionOpen(true);
                 }}
               >
                 {algoSessionActive ? "Stop" : "Start"}
@@ -324,43 +410,51 @@ function AnalyticsPanel() {
                 </Tooltip>
               ) : null}
             </div>
+            {namingSessionOpen && !algoSessionActive ? (
+              <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[rgba(255,255,255,0.025)] p-3">
+                <label className="unt-field-label" htmlFor="trading-session-name">Session name</label>
+                <div className="mt-1.5 flex gap-2">
+                  <input
+                    id="trading-session-name"
+                    value={sessionNameDraft}
+                    onChange={(e) => setSessionNameDraft(e.target.value)}
+                    className="unt-input h-9 min-w-0 flex-1 text-[13px]"
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    onClick={() => startNamedSession(sessionNameDraft)}
+                    disabled={!sessionNameDraft.trim()}
+                    className="unt-btn-primary px-3 py-2 text-[12px] font-semibold disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNamingSessionOpen(false)}
+                    className="rounded-md border border-[var(--color-border-subtle)] px-3 py-2 text-[12px] text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : null}
             {tradingNotice ? (
-              <p className="unt-help-text whitespace-pre-wrap font-medium text-amber-400/90">{tradingNotice}</p>
-            ) : (
-              <p className="unt-help-text">
-                {!chartAnalytics.mint
-                  ? "Paste a token CA in Chart to enable Start."
-                  : tradingMode === "real"
-                    ? "Real mode needs a funded PumpPortal wallet in Setup."
-                    : "Paper mode — no real money used."}
-              </p>
-            )}
-            {!algoSessionActive && !canRunBundledScalper && selectedAlgoId != null ? (
-              <p className="unt-help-text">
-                Pick <strong className="font-semibold text-[var(--color-fg-muted)]">Order-book scalper (built-in)</strong> above to run this.
-              </p>
+              <p className={
+                "unt-help-text whitespace-pre-wrap font-medium " +
+                (tradingNotice.startsWith("Session saved") ? "text-emerald-400/90" : "text-amber-400/90")
+              }>{tradingNotice}</p>
             ) : null}
           </div>
 
           <div className="space-y-2 border-t border-[var(--color-border-subtle)] pt-4">
-            <h3 className="unt-section-overline">Live bot trades</h3>
-            {!algoSessionActive ? (
-              <p className="unt-help-text">
-                Pick the built-in scalper, put a coin on Chart, then tap Start — trades show here.
-              </p>
-            ) : selectedAlgoId !== BUILTIN_SCALPER_PRESET_ID ? (
-              <p className="unt-help-text">
-                Pick the built-in scalper above, then tap <strong className="font-semibold text-[var(--color-fg-muted)]">Start</strong>.
-              </p>
-            ) : !chartAnalytics.mint ? (
-              <p className="unt-help-text">
-                Paste your coin on the Chart tab first — we need to see trades rolling in.
-              </p>
-            ) : chartAnalytics.orderBookConn !== "open" ? (
-              <p className="unt-help-text">
-                Live feed isn&apos;t ready ({chartAnalytics.orderBookConn}). Keep your Chart tab open with this coin.
-              </p>
-            ) : tradingMode === "real" ? (
+            <div className="flex items-center gap-2">
+              <h3 className="unt-section-overline mb-0">Live bot trades</h3>
+              <Tooltip text="Closed round trips from the active session appear here." side="top">
+                <span className="grid size-4 cursor-help place-items-center rounded-full border border-[var(--color-border-subtle)] text-[10px] text-[var(--color-fg-dim)]">?</span>
+              </Tooltip>
+            </div>
+            {tradingMode === "real" ? (
               <>
                 {chartAnalytics.livePumpPortalLastErr ? (
                   <p className="unt-help-text whitespace-pre-wrap font-medium text-red-400/92">
@@ -372,9 +466,6 @@ function AnalyticsPanel() {
                     Last Lightning tx: {chartAnalytics.livePumpPortalLastSig}
                   </p>
                 ) : null}
-                <p className="unt-help-text">
-                  Real mode sends trades through PumpPortal. Buys use {scalperLiveBuySol} SOL (see Live entry size above). Sells use the same exit rules as paper.
-                </p>
                 <BotTradesBook
                   rows={chartAnalytics.realBotTrades}
                   emptyHint="No on-chain round-trips logged yet. After a sell confirms, we parse buy+sell txs via RPC (Setup wallet secret required)."
@@ -390,110 +481,7 @@ function AnalyticsPanel() {
           </div>
         </section>
       </div>
-    </div>
-  );
-}
-
-/** Titled section card for strategy settings. */
-function SettingsCard({ label, tip, accent, locked, liveSession, headerRight, children }: {
-  label: string;
-  tip: string;
-  accent?: "sky";
-  locked?: boolean;
-  liveSession?: boolean;
-  headerRight?: ReactNode;
-  children: ReactNode;
-}) {
-  const accentColor = accent === "sky" ? "#38bdf8" : "#2EA8FF";
-  return (
-    <div
-      className="overflow-hidden rounded-lg border"
-      style={{
-        background: "var(--color-bg-editor)",
-        borderColor: `color-mix(in srgb, ${accentColor} 18%, var(--color-border-subtle))`,
-      }}
-    >
-      {/* Header strip */}
-      <div
-        className="flex items-center gap-2 border-b px-3 py-2"
-        style={{
-          borderColor: `color-mix(in srgb, ${accentColor} 15%, var(--color-border-subtle))`,
-          background: `color-mix(in srgb, ${accentColor} 6%, transparent)`,
-        }}
-      >
-        <div
-          className="h-3 w-0.5 shrink-0 rounded-full"
-          style={{ background: `color-mix(in srgb, ${accentColor} 70%, transparent)` }}
-        />
-        <span className="text-[11px] font-semibold tracking-wide" style={{ color: `color-mix(in srgb, ${accentColor} 85%, var(--color-fg))` }}>
-          {label}
-        </span>
-        <HelpTip text={tip} />
-        <div className="ml-auto flex shrink-0 items-center gap-2">
-          {locked ? (
-            <span className="text-[9px] text-[var(--color-fg-dim)]">stop session to edit</span>
-          ) : null}
-          {liveSession ? (
-            <span className="text-[9px] font-medium" style={{ color: "#22d3ee" }}>● live</span>
-          ) : null}
-          {headerRight}
-        </div>
-      </div>
-      {/* Body */}
-      <div className="px-3 py-2.5">
-        {children}
-      </div>
-    </div>
-  );
-}
-
-/** Small inline help icon — shows tooltip on hover. */
-function HelpTip({ text }: { text: string }) {
-  return (
-    <Tooltip text={text} side="right">
-      <span className="cursor-help select-none rounded-full border border-[var(--color-border-subtle)] px-1.5 py-px text-[9px] font-medium text-[var(--color-fg-dim)] hover:border-[color-mix(in_srgb,#2EA8FF_35%,transparent)] hover:text-[var(--color-fg-muted)]">
-        ?
-      </span>
-    </Tooltip>
-  );
-}
-
-/** One labeled number input knob. */
-function Knob({ label, value, min, max, step, unit, tip, disabled, onChange }: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  unit?: string;
-  tip: string;
-  disabled?: boolean;
-  onChange: (v: number) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-1">
-        <span className="text-[10px] font-medium text-[var(--color-fg-dim)]">{label}</span>
-        <HelpTip text={tip} />
-      </div>
-      <div className="flex items-center gap-1.5">
-        <input
-          type="number"
-          min={min}
-          max={max}
-          step={step}
-          value={value}
-          disabled={disabled}
-          onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) onChange(n); }}
-          className={
-            "unt-input h-8 w-full rounded-md border font-mono text-[13px] font-medium tabular-nums " +
-            (disabled
-              ? "cursor-not-allowed opacity-50"
-              : "border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-fg)]")
-          }
-        />
-        {unit ? <span className="shrink-0 text-[10px] font-medium text-[var(--color-fg-dim)]">{unit}</span> : null}
-      </div>
+      </AlgoTabs>
     </div>
   );
 }
@@ -737,67 +725,69 @@ function ScalperPaperPanel({
   tradingMode: TradingMode;
   liveChainTrades: BotTradeRow[];
 }) {
-  const { scalperUserConfig, setScalperUserConfig } = useApp();
+  const { scalperUserConfig } = useApp();
 
-  const wrap = (belowRules: ReactNode) => (
+  const wrap = (belowRules: React.ReactNode) => (
     <div className="space-y-2 text-[12px]">
-      {/* ── Entry card ── */}
-      <SettingsCard
-        label="Entry"
-        tip="Rules for when we open a buy."
-        liveSession={paperSessionActive}
-      >
-        <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
-          <Knob label="Dip %" value={scalperUserConfig.dipMinPct} min={1} max={50} step={1} unit="%"
-            tip="How far the chart needs to drop from its recent high before we look for a buy. After each trade, we start measuring again."
-            onChange={(v) => setScalperUserConfig({ dipMinPct: v })} />
-          <Knob label="Min buy (SOL)" value={scalperUserConfig.catalystMinSol} min={0.01} max={10} step={0.05} unit="SOL"
-            tip="We only jump in if someone buys this much SOL or more. Tiny buys are ignored so we don't chase noise."
-            onChange={(v) => setScalperUserConfig({ catalystMinSol: v })} />
+      <div className="overflow-hidden rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-bg-editor)]">
+        <div className="border-b border-[var(--color-border-subtle)] px-3 py-2">
+          <span className="text-[11px] font-semibold tracking-wide text-[var(--color-fg-muted)]">
+            Strategy blueprint (read-only in Trading)
+          </span>
         </div>
-      </SettingsCard>
-
-      {/* ── Exit card ── */}
-      <SettingsCard label="Exit" tip="Rules for when we sell and leave the trade." liveSession={paperSessionActive}>
-        <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
-          <Knob label="Take profit %" value={scalperUserConfig.takeProfitPct} min={1} max={200} step={1} unit="%"
-            tip="We sell for profit when the chart goes up this much above where we bought (same numbers as on your chart)."
-            onChange={(v) => setScalperUserConfig({ takeProfitPct: v })} />
-          <Knob label="Stop SOL" value={scalperUserConfig.minOrderBookSellSolForStop} min={0.01} max={10} step={0.05} unit="SOL"
-            tip="If we see a sell this big or bigger, we treat it as a stop and get out. Smaller sells don't count."
-            onChange={(v) => setScalperUserConfig({ minOrderBookSellSolForStop: v })} />
-          <Knob label="Re-entry cooldown (s)" value={Math.round(scalperUserConfig.reentryCooldownMs / 1000)} min={2} max={300} step={1} unit="s"
-            tip="Seconds to wait after a closed trade before looking for a new entry. Default 30 s prevents back-to-back double entries."
-            onChange={(v) => setScalperUserConfig({ reentryCooldownMs: Math.round(v) * 1000 })} />
-        </div>
-      </SettingsCard>
-
-      {/* ── Execution card (real mode only) ── */}
-      {tradingMode === "real" ? (
-        <SettingsCard
-          label="Execution"
-          tip="Only used when real money is on. Slippage = how much the price can move before your trade still goes through. Priority fee = a little extra SOL so the chain handles your trade faster."
-          liveSession={paperSessionActive}
-        >
-          <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
-            <Knob label="Slippage %" value={scalperUserConfig.realSlippagePct} min={1} max={50} step={1} unit="%"
-              tip="How much wiggle room the price has. Higher usually means fewer failed trades on jumpy coins."
-              onChange={(v) => setScalperUserConfig({ realSlippagePct: v })} />
-            <Knob label="Priority fee" value={scalperUserConfig.realPriorityFeeSol} min={0.00001} max={0.1} step={0.0005} unit="SOL"
-              tip="Extra SOL paid so your trade gets picked up sooner. Try around 0.001 SOL to start."
-              onChange={(v) => setScalperUserConfig({ realPriorityFeeSol: v })} />
+        <div className="grid grid-cols-2 gap-x-3 gap-y-2 px-3 py-2.5 text-[11px]">
+          <div>
+            <span className="text-[var(--color-fg-dim)]">Entry dip:</span>{" "}
+            <span className="font-mono text-[var(--color-fg)]">{scalperUserConfig.dipMinPct}%</span>
           </div>
-        </SettingsCard>
-      ) : null}
+          <div>
+            <span className="text-[var(--color-fg-dim)]">Entry min buy:</span>{" "}
+            <span className="font-mono text-[var(--color-fg)]">{scalperUserConfig.catalystMinSol} SOL</span>
+          </div>
+          <div>
+            <span className="text-[var(--color-fg-dim)]">Exit take profit:</span>{" "}
+            <span className="font-mono text-[var(--color-fg)]">{scalperUserConfig.takeProfitPct}%</span>
+          </div>
+          <div>
+            <span className="text-[var(--color-fg-dim)]">Exit stop sell:</span>{" "}
+            <span className="font-mono text-[var(--color-fg)]">{scalperUserConfig.minOrderBookSellSolForStop} SOL</span>
+          </div>
+          <div>
+            <span className="text-[var(--color-fg-dim)]">Re-entry cooldown:</span>{" "}
+            <span className="font-mono text-[var(--color-fg)]">{Math.round(scalperUserConfig.reentryCooldownMs / 1000)}s</span>
+          </div>
+          {tradingMode === "real" ? (
+            <>
+              <div>
+                <span className="text-[var(--color-fg-dim)]">Slippage:</span>{" "}
+                <span className="font-mono text-[var(--color-fg)]">{scalperUserConfig.realSlippagePct}%</span>
+              </div>
+              <div>
+                <span className="text-[var(--color-fg-dim)]">Priority fee:</span>{" "}
+                <span className="font-mono text-[var(--color-fg)]">{scalperUserConfig.realPriorityFeeSol} SOL</span>
+              </div>
+            </>
+          ) : null}
+        </div>
+      </div>
 
       {/* ── Bounce zones card ── */}
       {mint ? (
-        <SettingsCard
-          label="Bounce zones"
-          tip="Lines on the chart where price bounced a few times. Turn a line on (solid dot) and we only buy when price is close to it. Drag the line on the chart to move it."
-          accent="sky"
-          headerRight={<SuggestLinesButton />}
-        >
+        <div className="overflow-hidden rounded-lg border border-[color-mix(in_srgb,#38bdf8_18%,var(--color-border-subtle))] bg-[var(--color-bg-editor)]">
+          <div
+            className="flex items-center gap-2 border-b px-3 py-2"
+            style={{
+              borderColor: "color-mix(in srgb, #38bdf8 15%, var(--color-border-subtle))",
+              background: "color-mix(in srgb, #38bdf8 6%, transparent)",
+            }}
+          >
+            <div className="h-3 w-0.5 shrink-0 rounded-full bg-sky-400/70" />
+            <span className="text-[11px] font-semibold tracking-wide text-sky-200/90">Vision bounce zones (default)</span>
+            <div className="ml-auto">
+              <SuggestLinesButton />
+            </div>
+          </div>
+          <div className="px-3 py-2.5">
           <Tooltip
             text="Refresh bounce lines sends one chart image to your LLM per click — costs more than plain chat. Check your provider usage dashboard."
             side="bottom"
@@ -813,8 +803,19 @@ function ScalperPaperPanel({
             </div>
           </Tooltip>
           <BounceZonesEditor mint={mint} />
-        </SettingsCard>
-      ) : null}
+          </div>
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-lg border border-[color-mix(in_srgb,#38bdf8_14%,var(--color-border-subtle))] bg-[var(--color-bg-editor)]">
+          <div className="flex items-center gap-2 border-b border-[color-mix(in_srgb,#38bdf8_15%,var(--color-border-subtle))] bg-[color-mix(in_srgb,#38bdf8_6%,transparent)] px-3 py-2">
+            <div className="h-3 w-0.5 shrink-0 rounded-full bg-sky-400/70" />
+            <span className="text-[11px] font-semibold tracking-wide text-sky-200/90">Vision bounce zones (default)</span>
+          </div>
+          <div className="px-3 py-2.5 text-[10.5px] text-[var(--color-fg-dim)]">
+            Vision lines are enabled by default for every algo. Load a mint in Chart to populate and edit zones.
+          </div>
+        </div>
+      )}
 
       {belowRules}
     </div>

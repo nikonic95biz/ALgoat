@@ -66,6 +66,7 @@ import {
 import {
   detectBounceZonesVision,
 } from "@/lib/visionBounceDetect";
+import { usePumpPortalConfigRevision } from "@/hooks/usePumpPortalConfigRevision";
 
 /** Dark trading terminal palette (high-contrast teal up / coral down on charcoal). */
 const BG = "#0b0e11";
@@ -242,15 +243,18 @@ export function CaChartPanel() {
     caMintInput,
     setCaMintInput,
     selectedAlgoId,
+    userAlgos,
     setChartAnalytics,
     algoSessionActive,
     setAlgoSessionActive,
     tradingMode,
     tradingHalted,
     setTradingHalted,
+    startTradingSessionRecord,
     hardStopTrading,
     scalperLiveBuySol,
     appendPersistedTrades,
+    activeTradingSessionId,
     bounceZones,
     setDetectedZones,
     updateBounceZonePrice,
@@ -260,6 +264,7 @@ export function CaChartPanel() {
     model,
     manualSellRequested,
     clearManualSellRequest,
+    appendTradesToActiveSession,
   } = useApp();
 
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -280,6 +285,7 @@ export function CaChartPanel() {
 
   const [debouncedMint, setDebouncedMint] = useState("");
   const [chartInterval, setChartInterval] = useState<ChartInterval>("5s");
+  usePumpPortalConfigRevision();
   const [chartTzChoice, setChartTzChoice] = useState<ChartTimezoneChoice>(() => loadChartTimezoneChoice());
   const [scalperCutoffMs, setScalperCutoffMs] = useState<number | null>(null);
   const [livePumpPortalSig, setLivePumpPortalSig] = useState<string | null>(null);
@@ -287,6 +293,8 @@ export function CaChartPanel() {
   /** Confirmed Lightning round-trips with RPC-parsed wallet SOL (real mode only). */
   const [liveChainTrades, setLiveChainTrades] = useState<BotTradeRowChain[]>([]);
   const [chartSessionNotice, setChartSessionNotice] = useState<string | null>(null);
+  const [chartNamingOpen, setChartNamingOpen] = useState(false);
+  const [chartSessionNameDraft, setChartSessionNameDraft] = useState("");
 
   useEffect(() => {
     if (!chartSessionNotice) return;
@@ -411,9 +419,18 @@ export function CaChartPanel() {
     };
   }, [mintLoaded, streamMint, liveRowsForMc]);
 
+  const selectedUserAlgo = useMemo(() => userAlgos.find((a) => a.id === selectedAlgoId), [selectedAlgoId, userAlgos]);
+  const selectedScalperConfig = selectedUserAlgo?.strategyId === BUILTIN_SCALPER_PRESET_ID && selectedUserAlgo.config
+    ? selectedUserAlgo.config
+    : scalperUserConfig;
+  const selectedAlgoCanRunScalper =
+    selectedAlgoId === BUILTIN_SCALPER_PRESET_ID ||
+    selectedUserAlgo?.strategyId === BUILTIN_SCALPER_PRESET_ID;
+  const selectedAlgoRunLabel = selectedUserAlgo?.name ?? "Order-book scalper";
+
   const scalperEngineRunning =
     algoSessionActive &&
-    selectedAlgoId === BUILTIN_SCALPER_PRESET_ID &&
+    selectedAlgoCanRunScalper &&
     (tradingMode === "paper" || tradingMode === "real");
 
   const prevLiveOpenRef = useRef<boolean | undefined>(undefined);
@@ -431,7 +448,7 @@ export function CaChartPanel() {
   useEffect(() => {
     const running =
       algoSessionActive &&
-      selectedAlgoId === BUILTIN_SCALPER_PRESET_ID &&
+      selectedAlgoCanRunScalper &&
       !!mintLoaded &&
       (tradingMode === "paper" || tradingMode === "real");
     if (!running) {
@@ -448,7 +465,7 @@ export function CaChartPanel() {
       lastBuyVenueRef.current = null;
       realPositionOpenRef.current = false;
     }
-  }, [algoSessionActive, selectedAlgoId, mintLoaded, tradingMode]);
+  }, [algoSessionActive, selectedAlgoCanRunScalper, mintLoaded, tradingMode]);
 
   useEffect(() => {
     if (tradingMode !== "real") {
@@ -501,8 +518,8 @@ export function CaChartPanel() {
         mint: mintLoaded,
         amount: "100%",
         denominatedInSol: "false",
-        slippage: scalperUserConfig.realSlippagePct,
-        priorityFee: scalperUserConfig.realPriorityFeeSol,
+        slippage: selectedScalperConfig.realSlippagePct,
+        priorityFee: selectedScalperConfig.realPriorityFeeSol,
         pool,
       });
 
@@ -545,7 +562,17 @@ export function CaChartPanel() {
             roiPct,
           };
           setLiveChainTrades((prev) => [...prev, chainTrade]);
-          appendPersistedTrades([{ ...chainTrade, walletPk, mint: mintLoaded }]);
+          const persisted = [{
+            ...chainTrade,
+            walletPk,
+            mint: mintLoaded,
+            strategyId: BUILTIN_SCALPER_PRESET_ID,
+            presetId: selectedAlgoId ?? BUILTIN_SCALPER_PRESET_ID,
+            presetName: selectedAlgoRunLabel,
+            sessionId: activeTradingSessionId ?? `${selectedAlgoId ?? BUILTIN_SCALPER_PRESET_ID}-${scalperCutoffMs ?? "manual"}`,
+          }];
+          appendPersistedTrades(persisted);
+          appendTradesToActiveSession(persisted);
         }
       }
 
@@ -558,9 +585,14 @@ export function CaChartPanel() {
     mintLoaded,
     hardStopTrading,
     lightningPoolPreference,
-    scalperUserConfig.realSlippagePct,
-    scalperUserConfig.realPriorityFeeSol,
+    selectedScalperConfig.realSlippagePct,
+    selectedScalperConfig.realPriorityFeeSol,
     appendPersistedTrades,
+    appendTradesToActiveSession,
+    activeTradingSessionId,
+    selectedAlgoId,
+    selectedAlgoRunLabel,
+    scalperCutoffMs,
   ]);
 
   const mintZones = useMemo(
@@ -583,7 +615,7 @@ export function CaChartPanel() {
       minTradeTsMs: scalperCutoffMs,
       paperBuySol: tradingMode === "paper" ? scalperLiveBuySol : undefined,
       activeBounceZonePrices: activeBounceZonePricesForScalper,
-      scalperConfig: scalperUserConfig,
+      scalperConfig: selectedScalperConfig,
     });
   }, [
     scalperEngineRunning,
@@ -593,7 +625,7 @@ export function CaChartPanel() {
     tradingMode,
     scalperLiveBuySol,
     activeBounceZonePricesForScalper,
-    scalperUserConfig,
+    selectedScalperConfig,
   ]);
 
   const lastPersistedPaperCountRef = useRef(0);
@@ -725,8 +757,18 @@ export function CaChartPanel() {
     const fresh = all.slice(lastPersistedPaperCountRef.current);
     lastPersistedPaperCountRef.current = newCount;
     const walletPk = getPumpPortalTradingWalletPubkey() ?? "paper";
-    appendPersistedTrades(fresh.map((t) => ({ ...t, walletPk, mint: mintLoaded })));
-  }, [paperScalper, mintLoaded, appendPersistedTrades]);
+    const persistedFresh = fresh.map((t) => ({
+      ...t,
+      walletPk,
+      mint: mintLoaded,
+      strategyId: BUILTIN_SCALPER_PRESET_ID,
+      presetId: selectedAlgoId ?? BUILTIN_SCALPER_PRESET_ID,
+      presetName: selectedAlgoRunLabel,
+      sessionId: activeTradingSessionId ?? `${selectedAlgoId ?? BUILTIN_SCALPER_PRESET_ID}-${scalperCutoffMs ?? "paper"}`,
+    }));
+    appendPersistedTrades(persistedFresh);
+    appendTradesToActiveSession(persistedFresh);
+  }, [paperScalper, mintLoaded, appendPersistedTrades, appendTradesToActiveSession, activeTradingSessionId, scalperCutoffMs, selectedAlgoId, selectedAlgoRunLabel]);
 
   // Reset paper persist counter when a new session starts or mint changes.
   useEffect(() => {
@@ -797,8 +839,8 @@ export function CaChartPanel() {
           mint: mintLoaded,
           amount: maybeBuy ? scalperLiveBuySol : "100%",
           denominatedInSol: maybeBuy ? "true" : "false",
-          slippage: scalperUserConfig.realSlippagePct,
-          priorityFee: scalperUserConfig.realPriorityFeeSol,
+          slippage: selectedScalperConfig.realSlippagePct,
+          priorityFee: selectedScalperConfig.realPriorityFeeSol,
           pool: poolForTx,
         });
         if (!res.ok) {
@@ -889,11 +931,17 @@ export function CaChartPanel() {
           roiPct,
         };
         setLiveChainTrades((prev) => [...prev, chainTrade]);
-        appendPersistedTrades([{
+        const persisted = [{
           ...chainTrade,
           walletPk: walletPk,
           mint: mintLoaded,
-        }]);
+          strategyId: BUILTIN_SCALPER_PRESET_ID,
+          presetId: selectedAlgoId ?? BUILTIN_SCALPER_PRESET_ID,
+          presetName: selectedAlgoRunLabel,
+          sessionId: activeTradingSessionId ?? `${selectedAlgoId ?? BUILTIN_SCALPER_PRESET_ID}-${scalperCutoffMs ?? "real"}`,
+        }];
+        appendPersistedTrades(persisted);
+        appendTradesToActiveSession(persisted);
       })();
       return;
     }
@@ -908,9 +956,14 @@ export function CaChartPanel() {
     liveState,
     scalperLiveBuySol,
     lightningPoolPreference,
-    scalperUserConfig.realSlippagePct,
-    scalperUserConfig.realPriorityFeeSol,
+    selectedScalperConfig.realSlippagePct,
+    selectedScalperConfig.realPriorityFeeSol,
     appendPersistedTrades,
+    appendTradesToActiveSession,
+    activeTradingSessionId,
+    selectedAlgoId,
+    selectedAlgoRunLabel,
+    scalperCutoffMs,
   ]);
 
   useEffect(() => {
@@ -1202,7 +1255,15 @@ export function CaChartPanel() {
   useEffect(() => {
     const s = seriesRef.current;
     const chart = chartRef.current;
-    if (!s || !chart || chartRows.length === 0) return;
+    if (!s || !chart) return;
+
+    // When rows clear (e.g. interval switch), explicitly wipe the visual series
+    // so the chart doesn't freeze on stale candles from the previous interval.
+    if (chartRows.length === 0) {
+      prevBaseRowsRef.current = baseRows;
+      try { s.setData([]); } catch { /* ignore */ }
+      return;
+    }
 
     const ts = chart.timeScale();
     /**
@@ -1217,12 +1278,24 @@ export function CaChartPanel() {
 
     if (baseRowsChanged) {
       // Full REST refresh: setData wipes all createPriceLine handles — re-draw immediately after.
-    s.setData(chartRows);
+      try {
+        s.setData(chartRows);
+      } catch (err) {
+        // LightweightCharts can throw "data not sorted or has duplicates" on stale cross-interval
+        // merges. Clear the series and let the next fetch fill it correctly.
+        console.warn("[chart] setData failed, clearing series:", err);
+        try { s.setData([]); } catch { /* ignore */ }
+        return;
+      }
       redrawBounceLinesOnSeries(s);
     } else {
       // Live tick only: series.update() preserves price lines, no re-draw needed.
       const last = chartRows[chartRows.length - 1];
-      if (last) s.update(last);
+      try {
+        if (last) s.update(last);
+      } catch {
+        /* ignore stale live-tick errors */
+      }
     }
 
     if (!didFitRef.current) {
@@ -1559,7 +1632,7 @@ export function CaChartPanel() {
 
         <div className="shrink-0 border-b border-[var(--color-border)] px-4 py-2">
           <div className="flex flex-wrap items-center gap-2">
-          <span className="unt-strip-heading shrink-0">Timeframe</span>
+            <span className="unt-strip-heading shrink-0">Timeframe</span>
             <div className="flex flex-wrap gap-1">
               {CHART_INTERVALS.map((iv) => {
                 const active = chartInterval === iv;
@@ -1572,7 +1645,7 @@ export function CaChartPanel() {
                     className={[
                       "rounded-md border px-2.5 py-1 font-mono text-[12px] transition-colors",
                       active
-                      ? "border-[color-mix(in_srgb,var(--color-fg)_18%,transparent)] bg-[color-mix(in_srgb,#2EA8FF_14%,transparent)] text-[var(--color-fg)]"
+                        ? "border-[color-mix(in_srgb,var(--color-fg)_18%,transparent)] bg-[color-mix(in_srgb,#2EA8FF_14%,transparent)] text-[var(--color-fg)]"
                         : "border-[var(--color-border)] bg-transparent text-[var(--color-fg-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-fg)]",
                     ].join(" ")}
                   >
@@ -1581,6 +1654,7 @@ export function CaChartPanel() {
                 );
               })}
             </div>
+
           </div>
         </div>
 
@@ -1626,6 +1700,9 @@ export function CaChartPanel() {
                 >
                   {tradingMode === "real" ? "Real trading live" : "Paper trading live"}
           </span>
+                <p className="text-[11px] leading-snug text-[var(--color-fg-dim)]">
+                  Running preset: <span className="font-medium text-[var(--color-fg)]">{selectedAlgoRunLabel}</span>
+                </p>
                 {tradingMode === "real" ? (
                   <>
                     <p className="text-[11px] leading-snug text-[var(--color-fg-dim)]">
@@ -1664,18 +1741,19 @@ export function CaChartPanel() {
           <button
             type="button"
             className="unt-btn-primary shrink-0 px-4 py-2 text-[13px] font-medium"
-              disabled={!scalperEngineRunning && selectedAlgoId !== BUILTIN_SCALPER_PRESET_ID}
+              disabled={!scalperEngineRunning && !selectedAlgoCanRunScalper}
               title={
-                !scalperEngineRunning && selectedAlgoId !== BUILTIN_SCALPER_PRESET_ID
-                  ? "Select Order-book scalper under Dashboard, then Start here or in the sidebar"
+                !scalperEngineRunning && !selectedAlgoCanRunScalper
+                  ? "Select the built-in scalper or a trained scalper preset, then Start here or in the sidebar"
                   : undefined
               }
             onClick={() => {
                 if (scalperEngineRunning) {
                   hardStopTrading();
+                  setChartNamingOpen(false);
                 return;
               }
-                if (selectedAlgoId !== BUILTIN_SCALPER_PRESET_ID) return;
+                if (!selectedAlgoCanRunScalper) return;
                 if (tradingMode === "real" && !getEffectivePumpPortalApiKey().trim()) {
                   setChartSessionNotice(
                     appendPumpPortalTradingWalletHint(
@@ -1684,13 +1762,66 @@ export function CaChartPanel() {
                   );
                   return;
                 }
-                setTradingHalted(false);
-              setAlgoSessionActive(true);
+                setChartSessionNameDraft(`Trading session ${new Date().toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`);
+                setChartNamingOpen(true);
             }}
           >
               {scalperEngineRunning ? "Stop" : "Start"}
           </button>
           </div>
+          {chartNamingOpen && !scalperEngineRunning ? (
+            <div className="mt-3 rounded-lg border border-[var(--color-border-subtle)] bg-[rgba(255,255,255,0.025)] p-3">
+              <label className="unt-field-label" htmlFor="chart-trading-session-name">Session name</label>
+              <div className="mt-1.5 flex gap-2">
+                <input
+                  id="chart-trading-session-name"
+                  value={chartSessionNameDraft}
+                  onChange={(e) => setChartSessionNameDraft(e.target.value)}
+                  className="unt-input h-9 min-w-0 flex-1 text-[13px]"
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const name = chartSessionNameDraft.trim();
+                    if (!name || !mintLoaded) return;
+                    startTradingSessionRecord({
+                      name,
+                      mode: tradingMode,
+                      strategyId: BUILTIN_SCALPER_PRESET_ID,
+                      presetId: selectedAlgoId ?? BUILTIN_SCALPER_PRESET_ID,
+                      presetName: selectedAlgoRunLabel,
+                      mint: mintLoaded,
+                      walletPk: getPumpPortalTradingWalletPubkey(),
+                      configSnapshot: selectedScalperConfig,
+                      liveBuySol: scalperLiveBuySol,
+                      startSnapshot: {
+                        tapeSampleSize: tapeSummary?.sampleSize ?? 0,
+                        latestMcUsd: tapeSummary?.latestMcUsd ?? null,
+                        orderBookConn: liveState,
+                        orderBookLastTradeAt: tapeSummary?.recentPrints[0]?.ts ?? null,
+                      },
+                    });
+                    setTradingHalted(false);
+                    setAlgoSessionActive(true);
+                    setChartNamingOpen(false);
+                    setChartSessionNotice("Session saved. Trading started.");
+                  }}
+                  disabled={!chartSessionNameDraft.trim()}
+                  className="unt-btn-primary px-3 py-2 text-[12px] font-semibold disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Save
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setChartNamingOpen(false)}
+                  className="rounded-md border border-[var(--color-border-subtle)] px-3 py-2 text-[12px] text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -1706,14 +1837,13 @@ export function CaChartPanel() {
         </div>
       </div>
 
-      {streamMint ? (
-        <PumpOrderBook
-          rows={liveRowsForMc}
-          state={liveState}
-          error={liveErr}
-          yMcCap={yMcCap}
-        />
-      ) : null}
+      <PumpOrderBook
+        rows={liveRowsForMc}
+        state={liveState}
+        error={liveErr}
+        mint={streamMint ?? null}
+        yMcCap={yMcCap}
+      />
     </div>
   );
 }

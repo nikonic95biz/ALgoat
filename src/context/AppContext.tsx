@@ -11,7 +11,7 @@ import type { BotTradeRow, BotTradeRowChain, BotTradeRowTape, ScalperPaperSnapsh
 import type { BounceZone } from "@/lib/chartBounceZones";
 import { createAssistantGreetingMessage } from "@/lib/chatGreeting";
 import { inferBackendIdFromBaseUrl } from "@/lib/llmBackends";
-import type { ChatMessage, ChatSession, GitHubWorkspaceSettings, ModelSettings, UserAlgoPreset } from "@/types";
+import type { AlgoBlueprint, ChatMessage, ChatSession, GitHubWorkspaceSettings, ModelSettings, TradingSessionRecord, TrainingSession, UserAlgoPreset } from "@/types";
 import { githubGetFileContent, githubPutFileContent } from "@/lib/githubApi";
 import {
   isFileSystemAccessSupported,
@@ -30,6 +30,9 @@ const GITHUB_WORKSPACE_KEY = "unt_github_workspace_v1";
 const LEGACY_MESSAGES_KEY = "unt_chat_messages_v1";
 const CHAT_SESSIONS_KEY = "unt_chat_sessions_v2";
 const USER_ALGOS_KEY = "unt_user_algo_presets_v1";
+const ALGO_BLUEPRINTS_KEY = "unt_algo_blueprints_v1";
+const TRAINING_SESSIONS_KEY = "unt_training_sessions_v1";
+const TRADING_SESSIONS_KEY = "unt_trading_sessions_v1";
 const TRADING_MODE_STORAGE_KEY = "unt_trading_mode_v1";
 const SELECTED_ALGO_KEY = "unt_selected_algo_v1";
 const CA_MINT_KEY = "unt_ca_mint_v1";
@@ -44,6 +47,10 @@ const MAX_SESSIONS = 10;
 const MAX_PERSISTED_TRADES = 1000;
 
 export type TradingMode = "paper" | "real";
+
+function normalizeAlgoName(name: string): string {
+  return name.trim().replace(/\s+/g, " ").toLowerCase();
+}
 
 function loadTradingMode(): TradingMode {
   try {
@@ -93,6 +100,36 @@ function loadUserAlgos(): UserAlgoPreset[] {
     const raw = localStorage.getItem(USER_ALGOS_KEY);
     if (!raw) return [];
     return JSON.parse(raw) as UserAlgoPreset[];
+  } catch {
+    return [];
+  }
+}
+
+function loadAlgoBlueprints(): AlgoBlueprint[] {
+  try {
+    const raw = localStorage.getItem(ALGO_BLUEPRINTS_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as AlgoBlueprint[];
+  } catch {
+    return [];
+  }
+}
+
+function loadTrainingSessions(): TrainingSession[] {
+  try {
+    const raw = localStorage.getItem(TRAINING_SESSIONS_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as TrainingSession[];
+  } catch {
+    return [];
+  }
+}
+
+function loadTradingSessions(): TradingSessionRecord[] {
+  try {
+    const raw = localStorage.getItem(TRADING_SESSIONS_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as TradingSessionRecord[];
   } catch {
     return [];
   }
@@ -191,6 +228,10 @@ export type SidebarMode = "analytics" | "models" | "code" | "performance" | "tra
 export type PersistedBotTrade = (BotTradeRowChain | BotTradeRowTape) & {
   walletPk: string;
   mint: string;
+  strategyId?: string;
+  presetId?: string;
+  presetName?: string;
+  sessionId?: string;
 };
 
 /**
@@ -332,6 +373,7 @@ type AppState = {
   messages: ChatMessage[];
   appendMessage: (m: Omit<ChatMessage, "id" | "createdAt">) => string;
   updateMessage: (id: string, patch: Partial<Pick<ChatMessage, "content">>) => void;
+  truncateMessagesAfter: (messageId: string) => void;
   clearChat: () => void;
 
   /** Opens the Setup sidebar (models / keys). */
@@ -354,7 +396,13 @@ type AppState = {
   setActivitySection: (s: ActivitySection) => void;
   userAlgos: UserAlgoPreset[];
   addUserAlgo: (name: string, description: string) => void;
+  saveUserAlgoPreset: (preset: Omit<UserAlgoPreset, "id" | "createdAt"> & { id?: string; createdAt?: number }) => string;
   removeUserAlgo: (id: string) => void;
+  algoBlueprints: AlgoBlueprint[];
+  saveAlgoBlueprint: (blueprint: Omit<AlgoBlueprint, "id" | "createdAt" | "updatedAt"> & { id?: string; createdAt?: number; updatedAt?: number }) => string;
+  removeAlgoBlueprint: (id: string) => void;
+  focusedAlgoLabPresetId: string | null;
+  setFocusedAlgoLabPresetId: (id: string | null) => void;
   selectedAlgoId: string | null;
   setSelectedAlgoId: (id: string | null) => void;
   caMintInput: string;
@@ -405,6 +453,15 @@ type AppState = {
   appendPersistedTrades: (trades: PersistedBotTrade[]) => void;
   /** Wipe the persistent trade log. */
   clearPersistedTrades: () => void;
+  trainingSessions: TrainingSession[];
+  addTrainingSession: (session: Omit<TrainingSession, "id" | "createdAt"> & { id?: string; createdAt?: number }) => string;
+  clearTrainingSessions: () => void;
+  tradingSessions: TradingSessionRecord[];
+  activeTradingSessionId: string | null;
+  startTradingSessionRecord: (session: Omit<TradingSessionRecord, "id" | "createdAt" | "status" | "trades"> & { id?: string; createdAt?: number }) => string;
+  stopTradingSessionRecord: () => void;
+  appendTradesToActiveSession: (trades: PersistedBotTrade[]) => void;
+  clearTradingSessions: () => void;
   githubWorkspace: GitHubWorkspaceSettings;
   setGithubWorkspace: (patch: Partial<GitHubWorkspaceSettings>) => void;
   openFilePath: string | null;
@@ -435,7 +492,13 @@ type AppState = {
 
 const Ctx = createContext<AppState | null>(null);
 
-export function AppProvider({ children }: { children: ReactNode }) {
+export function AppProvider({
+  children,
+  initialWorkspaceHandle,
+}: {
+  children: ReactNode;
+  initialWorkspaceHandle?: FileSystemDirectoryHandle | null;
+}) {
   const [model, setModelState] = useState(loadModel);
 
   // Chat sessions persist across reloads via localStorage so users don't lose history.
@@ -464,6 +527,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [chartAnalytics, setChartAnalyticsState] = useState<ChartAnalyticsState>(defaultChartAnalytics);
   const [composerBusy, setComposerBusy] = useState(false);
   const [userAlgos, setUserAlgos] = useState(loadUserAlgos);
+  const [algoBlueprints, setAlgoBlueprints] = useState(loadAlgoBlueprints);
+  const [focusedAlgoLabPresetId, setFocusedAlgoLabPresetId] = useState<string | null>(null);
+  const [trainingSessions, setTrainingSessions] = useState(loadTrainingSessions);
+  const [tradingSessions, setTradingSessions] = useState(loadTradingSessions);
+  const [activeTradingSessionId, setActiveTradingSessionId] = useState<string | null>(null);
   const [selectedAlgoId, setSelectedAlgoId] = useState<string | null>(loadSelectedAlgoId);
   const [caMintInput, setCaMintInput] = useState(loadCaMintInput);
   const [scalperLiveBuySol, setScalperLiveBuySolState] = useState(loadScalperLiveBuySol);
@@ -480,21 +548,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [workspaceFilePaths, setWorkspaceFilePaths] = useState<string[]>([]);
   const [applyEditTick, setApplyEditTick] = useState(0);
   const [lastAppliedPath, setLastAppliedPath] = useState<string | null>(null);
-  const [localWorkspaceHandle, setLocalWorkspaceHandleState] = useState<FileSystemDirectoryHandle | null>(null);
+  const [localWorkspaceHandle, setLocalWorkspaceHandleState] = useState<FileSystemDirectoryHandle | null>(
+    initialWorkspaceHandle ?? null,
+  );
   const [pendingLocalEdits, setPendingLocalEdits] = useState<Map<string, string>>(new Map());
 
-  // Restore persisted handle on mount (requires one user permission click before use)
+  // Restore persisted handle on mount only if none was passed from ProjectGate
   useEffect(() => {
-    if (!isFileSystemAccessSupported()) return;
+    if (initialWorkspaceHandle || !isFileSystemAccessSupported()) return;
     loadPersistedHandle().then((h) => {
       if (h) setLocalWorkspaceHandleState(h);
     }).catch(() => { /* storage unavailable */ });
-  }, []);
+  }, [initialWorkspaceHandle]);
 
   const connectLocalWorkspace = useCallback(async () => {
     const handle = await openLocalWorkspace();
     setLocalWorkspaceHandleState(handle);
-  }, []);
+  }, [userAlgos]);
 
   const disconnectLocalWorkspace = useCallback(() => {
     setLocalWorkspaceHandleState(null);
@@ -524,6 +594,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     lsSave(USER_ALGOS_KEY, JSON.stringify(userAlgos));
   }, [userAlgos]);
+
+  useEffect(() => {
+    lsSave(ALGO_BLUEPRINTS_KEY, JSON.stringify(algoBlueprints));
+  }, [algoBlueprints]);
+
+  useEffect(() => {
+    lsSave(TRAINING_SESSIONS_KEY, JSON.stringify(trainingSessions));
+  }, [trainingSessions]);
+
+  useEffect(() => {
+    lsSave(TRADING_SESSIONS_KEY, JSON.stringify(tradingSessions));
+  }, [tradingSessions]);
 
   useEffect(() => {
     lsSave(TRADING_MODE_STORAGE_KEY, tradingMode);
@@ -654,6 +736,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 ),
               },
         ),
+      );
+    },
+    [activeChatId, updateSessions],
+  );
+
+  const truncateMessagesAfter = useCallback(
+    (messageId: string) => {
+      updateSessions((ss) =>
+        ss.map((s) => {
+          if (s.id !== activeChatId) return s;
+          const idx = s.messages.findIndex((m) => m.id === messageId);
+          if (idx === -1) return s;
+          // Slice to idx (exclusive) — removes the edited message itself so the
+          // re-send can append a fresh one without leaving two consecutive user msgs.
+          return { ...s, messages: s.messages.slice(0, idx) };
+        }),
       );
     },
     [activeChatId, updateSessions],
@@ -877,6 +975,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const hardStopTrading = useCallback(() => {
     setTradingHalted(true);
     setAlgoSessionActive(false);
+    setActiveTradingSessionId((id) => {
+      if (id) {
+        setTradingSessions((prev) => prev.map((s) => s.id === id ? { ...s, status: "stopped", endedAt: Date.now() } : s));
+      }
+      return null;
+    });
   }, []);
 
   const requestManualSell = useCallback(() => {
@@ -899,6 +1003,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const appendTradesToActiveSession = useCallback((trades: PersistedBotTrade[]) => {
+    if (trades.length === 0 || !activeTradingSessionId) return;
+    setTradingSessions((prev) => prev.map((s) => {
+      if (s.id !== activeTradingSessionId) return s;
+      const existing = new Set(s.trades.map((t) => t.id));
+      const fresh = trades
+        .filter((t) => !existing.has(t.id))
+        .map((t) => ({
+          id: t.id,
+          kind: t.kind === "chain" ? "real" as const : "paper" as const,
+          closedAtTs: t.closedAtTs,
+          exitReason: t.exitReason,
+          pnlPct: t.kind === "chain" ? t.roiPct : t.pnlPct,
+          netSol: t.kind === "chain" ? t.netSol : t.paperSolEstimate?.netSol ?? null,
+          entryMcUsd: t.kind === "tape" ? t.entryMcUsd : undefined,
+          exitMcUsd: t.kind === "tape" ? t.exitMcUsd : undefined,
+        }));
+      return fresh.length ? { ...s, trades: [...s.trades, ...fresh] } : s;
+    }));
+  }, [activeTradingSessionId]);
+
   const clearPersistedTrades = useCallback(() => {
     setPersistedBotTrades([]);
   }, []);
@@ -910,19 +1035,165 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const addUserAlgo = useCallback((name: string, description: string) => {
     const trimmedName = name.trim();
     if (!trimmedName) return;
+    const normalizedName = normalizeAlgoName(trimmedName);
+    const existing = userAlgos.find((a) => normalizeAlgoName(a.name) === normalizedName);
+    if (existing) {
+      // Idempotent add: repeated clicks should focus existing preset, not duplicate it.
+      setFocusedAlgoLabPresetId(existing.id);
+      setUserAlgos((prev) =>
+        prev.map((p) =>
+          p.id === existing.id
+            ? {
+                ...p,
+                description:
+                  p.description.trim() && p.description !== "Chat to create this algo."
+                    ? p.description
+                    : (description.trim() || p.description),
+              }
+            : p,
+        ),
+      );
+      return;
+    }
+
+    const presetId = crypto.randomUUID();
+    const now = Date.now();
     const next: UserAlgoPreset = {
+      id: presetId,
+      name: trimmedName,
+      description: description.trim() || "Chat to create this algo.",
+      createdAt: now,
+      source: "chat",
+    };
+    setUserAlgos((prev) => [next, ...prev.filter((p) => p.id !== presetId)]);
+    setAlgoBlueprints((prev) => [{
       id: crypto.randomUUID(),
       name: trimmedName,
-      description: description.trim() || "No description",
-      createdAt: Date.now(),
-    };
-    setUserAlgos((prev) => [next, ...prev]);
-    setSelectedAlgoId(next.id);
+      createdAt: now,
+      updatedAt: now,
+      status: "draft",
+      goal: description.trim() || `Define how ${trimmedName} should discover, enter, exit, and manage risk.`,
+      universe: [],
+      signals: [],
+      entryRules: [],
+      exitRules: [],
+      riskRules: ["paper trade first", "review session performance before live trading"],
+      knobs: [],
+      training: { datasets: [], sessions: [], notes: "" },
+      performance: { sessions: [], winRate: null, pnl: null, lastTestedAt: null },
+      implementation: {
+        strategyId: null,
+        presetId,
+        sourceFiles: [],
+        runnable: false,
+      },
+    }, ...prev.filter((b) => b.implementation.presetId !== presetId)]);
+    setFocusedAlgoLabPresetId(presetId);
   }, []);
+
+  const saveUserAlgoPreset = useCallback((
+    preset: Omit<UserAlgoPreset, "id" | "createdAt"> & { id?: string; createdAt?: number },
+  ): string => {
+    const normalizedName = normalizeAlgoName(preset.name);
+    if (!preset.id) {
+      const existingByName = userAlgos.find((p) => normalizeAlgoName(p.name) === normalizedName);
+      if (existingByName) return existingByName.id;
+    }
+    const id = preset.id ?? crypto.randomUUID();
+    const next: UserAlgoPreset = {
+      ...preset,
+      id,
+      name: preset.name.trim() || "Untitled preset",
+      description: preset.description.trim() || "No description",
+      createdAt: preset.createdAt ?? Date.now(),
+    };
+    setUserAlgos((prev) => [next, ...prev.filter((p) => p.id !== id)]);
+    return id;
+  }, [userAlgos]);
 
   const removeUserAlgo = useCallback((id: string) => {
     setUserAlgos((prev) => prev.filter((a) => a.id !== id));
+    setAlgoBlueprints((prev) => prev.filter((b) => b.implementation.presetId !== id));
     setSelectedAlgoId((cur) => (cur === id ? null : cur));
+  }, []);
+
+  const saveAlgoBlueprint = useCallback((
+    blueprint: Omit<AlgoBlueprint, "id" | "createdAt" | "updatedAt"> & { id?: string; createdAt?: number; updatedAt?: number },
+  ): string => {
+    const id = blueprint.id ?? crypto.randomUUID();
+    const now = Date.now();
+    const next: AlgoBlueprint = {
+      ...blueprint,
+      id,
+      name: blueprint.name.trim() || "Untitled algo",
+      createdAt: blueprint.createdAt ?? now,
+      updatedAt: blueprint.updatedAt ?? now,
+    };
+    setAlgoBlueprints((prev) => [next, ...prev.filter((b) => b.id !== id)]);
+    return id;
+  }, []);
+
+  const removeAlgoBlueprint = useCallback((id: string) => {
+    setAlgoBlueprints((prev) => prev.filter((b) => b.id !== id));
+  }, []);
+
+  const addTrainingSession = useCallback((
+    session: Omit<TrainingSession, "id" | "createdAt"> & { id?: string; createdAt?: number },
+  ): string => {
+    const id = session.id ?? crypto.randomUUID();
+    const next: TrainingSession = {
+      ...session,
+      id,
+      createdAt: session.createdAt ?? Date.now(),
+    };
+    setTrainingSessions((prev) => [next, ...prev].slice(0, 100));
+    return id;
+  }, []);
+
+  const clearTrainingSessions = useCallback(() => {
+    setTrainingSessions([]);
+  }, []);
+
+  const startTradingSessionRecord = useCallback((
+    session: Omit<TradingSessionRecord, "id" | "createdAt" | "status" | "trades"> & { id?: string; createdAt?: number },
+  ): string => {
+    const id = session.id ?? crypto.randomUUID();
+    const next: TradingSessionRecord = {
+      ...session,
+      id,
+      createdAt: session.createdAt ?? Date.now(),
+      status: "running",
+      trades: [],
+    };
+    setTradingSessions((prev) => [next, ...prev.map((s): TradingSessionRecord => s.status === "running" ? { ...s, status: "stopped", endedAt: Date.now() } : s)].slice(0, 100));
+    setActiveTradingSessionId(id);
+    return id;
+  }, []);
+
+  const stopTradingSessionRecord = useCallback(() => {
+    setActiveTradingSessionId((id) => {
+      if (id) {
+        setTradingSessions((prev) => prev.map((s) => s.id === id ? { ...s, status: "stopped", endedAt: Date.now() } : s));
+      }
+      return null;
+    });
+  }, []);
+
+  const clearTradingSessions = useCallback(() => {
+    setTradingSessions([]);
+    setActiveTradingSessionId(null);
+  }, []);
+
+  const setAlgoSessionActiveAndMaybeStop = useCallback((v: boolean) => {
+    setAlgoSessionActive(v);
+    if (!v) {
+      setActiveTradingSessionId((id) => {
+        if (id) {
+          setTradingSessions((prev) => prev.map((s) => s.id === id ? { ...s, status: "stopped", endedAt: Date.now() } : s));
+        }
+        return null;
+      });
+    }
   }, []);
 
   const value = useMemo(
@@ -940,6 +1211,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       messages,
       appendMessage,
       updateMessage,
+      truncateMessagesAfter,
       clearChat,
       openSetupPanel,
       navigateChartToMint,
@@ -955,7 +1227,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setActivitySection,
       userAlgos,
       addUserAlgo,
+      saveUserAlgoPreset,
       removeUserAlgo,
+      algoBlueprints,
+      saveAlgoBlueprint,
+      removeAlgoBlueprint,
+      focusedAlgoLabPresetId,
+      setFocusedAlgoLabPresetId,
       selectedAlgoId,
       setSelectedAlgoId,
       caMintInput,
@@ -965,7 +1243,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       tradingMode,
       setTradingMode,
       algoSessionActive,
-      setAlgoSessionActive,
+      setAlgoSessionActive: setAlgoSessionActiveAndMaybeStop,
       tradingHalted,
       setTradingHalted,
       hardStopTrading,
@@ -987,6 +1265,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       persistedBotTrades,
       appendPersistedTrades,
       clearPersistedTrades,
+      trainingSessions,
+      addTrainingSession,
+      clearTrainingSessions,
+      tradingSessions,
+      activeTradingSessionId,
+      startTradingSessionRecord,
+      stopTradingSessionRecord,
+      appendTradesToActiveSession,
+      clearTradingSessions,
       githubWorkspace,
       setGithubWorkspace,
       openFilePath,
@@ -1011,14 +1298,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       chartAnalytics, setChartAnalytics,
       composerBusy,
       sidebarMode, sidebarOpen, activitySection,
-      userAlgos, addUserAlgo, removeUserAlgo, selectedAlgoId,
-      caMintInput, scalperLiveBuySol, tradingMode, algoSessionActive, tradingHalted,
+      userAlgos, addUserAlgo, saveUserAlgoPreset, removeUserAlgo,
+      algoBlueprints, saveAlgoBlueprint, removeAlgoBlueprint, focusedAlgoLabPresetId, selectedAlgoId,
+      caMintInput, scalperLiveBuySol, tradingMode, algoSessionActive, setAlgoSessionActiveAndMaybeStop, tradingHalted,
       manualSellRequested, requestManualSell, clearManualSellRequest,
       scalperUserConfig, setScalperUserConfig,
       bounceZones, setDetectedZones, bounceSuggestionTick, refreshSuggestedBounceZones,
       floorCandlesStatus, setFloorCandlesStatus,
       toggleBounceZone, updateBounceZonePrice, addBounceZone, removeBounceZone,
       persistedBotTrades, appendPersistedTrades, clearPersistedTrades,
+      trainingSessions, addTrainingSession, clearTrainingSessions,
+      tradingSessions, activeTradingSessionId, startTradingSessionRecord, stopTradingSessionRecord,
+      appendTradesToActiveSession, clearTradingSessions,
       githubWorkspace, setGithubWorkspace,
       openFilePath, openFileContent, setOpenFile,
       workspaceFilePaths, setWorkspaceFilePaths,

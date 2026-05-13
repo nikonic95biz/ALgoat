@@ -15,9 +15,9 @@ import {
   CircleStop,
   Copy,
   ExternalLink,
-  FilePen,
   ImagePlus,
   Loader2,
+  Pencil,
   Plus,
   Rocket,
   Trash2,
@@ -44,18 +44,28 @@ import {
   isAnthropicMessagesApiBaseUrl,
 } from "@/lib/llmAnthropic";
 import { isLikelyLocalLlm, presetAllowsOptionalApiKey } from "@/lib/llmPresets";
+import {
+  type LlmBackendId,
+  LLM_BACKENDS,
+  getLlmBackend,
+  inferBackendIdFromBaseUrl,
+} from "@/lib/llmBackends";
+import { LlmConnectCard } from "@/components/LlmConnectCard";
 import { wrongProviderKeyForOpenRouterHint } from "@/lib/openRouterKeyHints";
 import { consumeAnthropicMessageStream } from "@/lib/streamAnthropic";
 import { consumeChatCompletionStream } from "@/lib/streamChat";
+import { executeTool } from "@/lib/agentTools";
 import { mergeAbortSignals } from "@/lib/mergeAbortSignals";
 import {
   githubGetFileContent,
   type WorkflowRunStatus,
 } from "@/lib/githubApi";
-import { readLocalFile, buildLocalExportsDigest } from "@/lib/localWorkspace";
+import { readLocalFile } from "@/lib/localWorkspace";
 import type { ChatMessage, ModelSettings } from "@/types";
 import { ChatEmptyState } from "@/components/_ChatEmptyState";
 
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -71,6 +81,43 @@ type CommitResult = {
   sha: string;
   paths: string[];
 };
+
+type AppliedFileBackup = {
+  path: string;
+  previousContent: string | null;
+  existedBefore: boolean;
+};
+
+type ChatMode = "chat" | "build";
+type BuildCapability = "full-ide" | "write-only" | "blocked";
+type BuildFlowState =
+  | "chat"
+  | "build_confirm_pending"
+  | "build_running"
+  | "build_verifying"
+  | "build_done"
+  | "build_failed";
+
+type BuildArtifacts = {
+  edits: ReturnType<typeof parseChatEdits>;
+  algos: ReturnType<typeof parseAlgoBlocks>;
+  configPatch: ReturnType<typeof parseConfigPatch>;
+  issues: string[];
+  validForApply: boolean;
+};
+
+// ── Token budget constants ────────────────────────────────────────────────────
+// Anthropic's TPM limit is 30k input tokens/minute (for the free/starter tier).
+// Every tool round is a NEW API request — and the request includes ALL prior
+// turns, the full system prompt, and ALL tool definitions, every time.
+// We use a rolling 60-second token-bucket throttle below to stay under the cap.
+const MAX_ANTHROPIC_SYSTEM_CHARS = 10_000;   // ~2,500 tokens
+const MAX_ANTHROPIC_HISTORY_CHARS = 4_000;   // ~1,000 tokens
+const MAX_LIVE_CONTEXT_CHARS = 3_000;        // ~750 tokens
+const MAX_REPO_POLICY_CHARS = 600;
+const MAX_MENTION_CONTEXT_CHARS = 2_500;
+const ANTHROPIC_CHAT_MAX_TOKENS = 2_048;
+const ANTHROPIC_BUILD_MAX_TOKENS = 8_192;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -94,10 +141,161 @@ function flattenMarkdownText(node: ReactNode): string {
   return "";
 }
 
-/** Fenced blocks collapse tall snippets behind a header + chevron so replies don’t dominate the feed. */
-function CollapsibleFence({ children }: { children?: ReactNode }) {
-  const [open, setOpen] = useState(false);
+function clipMiddle(text: string, maxChars: number, label: string): string {
+  if (text.length <= maxChars) return text;
+  const half = Math.floor((maxChars - 32) / 2);
+  return (
+    text.slice(0, Math.max(0, half)) +
+    `\n\n...[${label} trimmed]...\n\n` +
+    text.slice(Math.max(0, text.length - half))
+  );
+}
 
+function trimHistoryByChars(history: Array<{ role: string; content: string }>, maxChars: number) {
+  let used = 0;
+  const kept: Array<{ role: string; content: string }> = [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const h = history[i]!;
+    const cost = h.content.length + 16;
+    if (used + cost > maxChars && kept.length > 0) break;
+    kept.push(h);
+    used += cost;
+  }
+  return kept.reverse();
+}
+
+function stripToolTraceTags(text: string): string {
+  if (!text) return text;
+  const cleaned = text
+    // Remove full tool blocks when well-formed
+    .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "")
+    .replace(/<tool_response>[\s\S]*?<\/tool_response>/gi, "")
+    // Remove truncated/unclosed tool blocks (common on max_tokens stops)
+    .replace(/<tool_call>[\s\S]*$/gi, "")
+    .replace(/<tool_response>[\s\S]*$/gi, "")
+    // Remove stray opening/closing tags that may stream in partial chunks
+    .replace(/<\/?tool_(call|response)>/gi, "")
+    // Remove common tool narration preambles that are not user-facing output
+    .replace(/(^|\n)Reading:[^\n]*(\n|$)/gi, "\n")
+    .replace(/(^|\n)Let me retrieve those now\.[^\n]*(\n|$)/gi, "\n")
+    .replace(/(^|\n)Let me pull the files[^\n]*(\n|$)/gi, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return cleaned;
+}
+
+function isExplicitBuildCommand(text: string): boolean {
+  return (
+    /\b(build it|implement this|start building|go ahead and build|ship it|patch it now)\b/i.test(text) ||
+    /^(build|implement|patch|edit|modify|wire|refactor)\b/i.test(text.trim())
+  );
+}
+
+function isCodeInvestigationIntent(text: string): boolean {
+  return (
+    /\b(look into|investigate|diagnose|debug|audit|review|analyze|inspect|check|trace|understand)\b/i.test(text) &&
+    /\b(code|repo|codebase|file|files|component|context|runtime|flow|bug|issue|error)\b/i.test(text)
+  ) || /\b(where is|why is|what is causing|how does)\b/i.test(text);
+}
+
+function isPotentialBuildIntent(text: string): boolean {
+  return (
+    /\b(build|implement|edit|patch|fix|wire|refactor|write|modify|code|ship|integrate)\b/i.test(text) ||
+    /\b(make it real|start building|build it|continue build|add this preset|build this into the app)\b/i.test(text) ||
+    /\b(code|file|component|hook|function|typescript|tsx|build error|typecheck)\b/i.test(text) ||
+    (/\b(add|update|change|create)\b/i.test(text) &&
+      /\b(code|file|component|ui|button|tab|panel|backend|frontend|app|engine|preset)\b/i.test(text))
+  );
+}
+
+function isBuildConfirmationYes(text: string): boolean {
+  return /^(yes|y|yeah|yep|ok|okay|sure|go ahead|do it|build it|start|ready)\b/i.test(text.trim());
+}
+
+function isBuildConfirmationNo(text: string): boolean {
+  return /^(no|n|not now|later|cancel|stop)\b/i.test(text.trim());
+}
+
+function needsTradingContext(text: string): boolean {
+  return /\b(token|mint|chart|price|market cap|mc|candle|order book|tape|buy|sell|trade|trading|session|pnl|wallet|pumpportal|nursery|zombie|watchlist|position|entry|exit|stop|take profit|scalper)\b/i.test(text);
+}
+
+function needsWorkspaceContext(text: string): boolean {
+  return /@src\//i.test(text) || /\b(open file|file tree|workspace|repo|repository|path|where is|which file)\b/i.test(text);
+}
+
+function buildCapability({
+  localIdeAgentReady,
+  localWorkspaceHandle,
+  workspaceReady,
+}: {
+  localIdeAgentReady: boolean;
+  localWorkspaceHandle: FileSystemDirectoryHandle | null;
+  workspaceReady: boolean;
+}): BuildCapability {
+  if (localIdeAgentReady) return "full-ide";
+  if (localWorkspaceHandle && workspaceReady) return "write-only";
+  return "blocked";
+}
+
+function buildBlockedMessage(capability: BuildCapability, hasWorkspace: boolean): string {
+  if (capability !== "blocked") return "";
+  return hasWorkspace
+    ? "Build is blocked because the local workspace permission is not ready. Reconnect or re-authorize the project folder, then try again."
+    : "Build is blocked because no local workspace folder is connected. Connect the project folder first so SolClaw can read and write files.";
+}
+
+function canTransitionBuildFlow(from: BuildFlowState, to: BuildFlowState): boolean {
+  switch (from) {
+    case "chat":
+      return to === "chat" || to === "build_confirm_pending" || to === "build_running";
+    case "build_confirm_pending":
+      return to === "chat" || to === "build_running" || to === "build_failed";
+    case "build_running":
+      return to === "build_running" || to === "build_verifying" || to === "build_done" || to === "build_failed" || to === "chat";
+    case "build_verifying":
+      return to === "build_done" || to === "build_failed" || to === "chat";
+    case "build_done":
+      return to === "chat" || to === "build_running" || to === "build_confirm_pending";
+    case "build_failed":
+      return to === "chat" || to === "build_running" || to === "build_confirm_pending";
+    default:
+      return false;
+  }
+}
+
+function parseBuildArtifacts(content: string): BuildArtifacts {
+  const edits = parseChatEdits(content);
+  const algos = parseAlgoBlocks(content);
+  const configPatch = parseConfigPatch(content);
+  const issues: string[] = [];
+
+  if (/\[Stopped:\s*max_tokens\]/i.test(content)) {
+    issues.push("Response was truncated (max_tokens).");
+  }
+  if (/<\/?tool_(call|response)>/i.test(content)) {
+    issues.push("Tool trace tags detected in output.");
+  }
+
+  const badPath = edits.find((e) =>
+    e.path.startsWith("/") ||
+    e.path.includes("..") ||
+    e.path.includes("\\") ||
+    e.path.trim().length === 0,
+  );
+  if (badPath) issues.push(`Unsafe edit path blocked: ${badPath.path}`);
+  if (edits.length > 12) issues.push(`Too many file edits in one response (${edits.length}).`);
+
+  const validForApply =
+    issues.length === 0 &&
+    (edits.length > 0 || algos.length > 0 || Boolean(configPatch));
+  return { edits, algos, configPatch, issues, validForApply };
+}
+
+/** Fenced blocks collapse tall snippets behind a header + chevron so replies don’t dominate the feed. */
+const chatFenceOpenMemory = new Set<string>();
+
+function CollapsibleFence({ children }: { children?: ReactNode }) {
   let lang = "Code";
   if (isValidElement(children) && children.type === "code") {
     const p = children.props as { className?: string };
@@ -108,13 +306,28 @@ function CollapsibleFence({ children }: { children?: ReactNode }) {
   const raw = flattenMarkdownText(children).replace(/\n$/, "");
   const lineCount = raw ? raw.split("\n").length : 0;
   const sizable = lineCount > 5 || raw.length > 360;
+  // Persist expanded state across stream rerenders to prevent flicker.
+  const fenceMemoryKey = `${lang}|${raw.slice(0, 220)}`;
+  const [open, setOpen] = useState(() => chatFenceOpenMemory.has(fenceMemoryKey));
+  useEffect(() => {
+    setOpen(chatFenceOpenMemory.has(fenceMemoryKey));
+  }, [fenceMemoryKey]);
+  useEffect(() => {
+    if (!sizable) return;
+    if (open) chatFenceOpenMemory.add(fenceMemoryKey);
+    else chatFenceOpenMemory.delete(fenceMemoryKey);
+  }, [open, sizable, fenceMemoryKey]);
   const expanded = open || !sizable;
 
   return (
     <div className="unt-chat-fence my-3 overflow-hidden rounded-lg border border-[var(--color-border-subtle)] bg-[#0e0e0e]">
       <button
         type="button"
-        onClick={() => sizable && setOpen((v) => !v)}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (sizable) setOpen((v) => !v);
+        }}
         disabled={!sizable}
         className={
           "flex w-full items-center gap-2 px-3 py-2 text-left transition-colors " +
@@ -159,27 +372,12 @@ function CollapsibleFence({ children }: { children?: ReactNode }) {
   );
 }
 
-function scrollTurnToTop(feed: HTMLDivElement, userMsgId: string, pad = 12): boolean {
-  const section = feed.querySelector(`[data-chat-turn-id="${CSS.escape(userMsgId)}"]`) as HTMLElement | null;
-  if (!section) return false;
-  const maxScroll = () => Math.max(0, feed.scrollHeight - feed.clientHeight);
-  let y = 0;
-  let n: HTMLElement | null = section;
-  while (n && n !== feed) { y += n.offsetTop; n = n.offsetParent as HTMLElement | null; }
-  if (n === feed) feed.scrollTop = Math.max(0, Math.min(y - pad, maxScroll()));
-  for (let k = 0; k < 32; k++) {
-    const d = section.getBoundingClientRect().top - feed.getBoundingClientRect().top - pad;
-    if (Math.abs(d) < 0.5) break;
-    feed.scrollTop = Math.max(0, Math.min(feed.scrollTop + d, maxScroll()));
-  }
-  return true;
-}
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function Prose({ content }: { content: string }) {
   return (
-    <div className="chat-prose chat-prose-assistant pr-6">
+    <div className="chat-prose chat-prose-assistant pr-8">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -206,13 +404,13 @@ function MintLoadButtons({
   const mints = useMemo(() => parseMintDirectives(content), [content]);
   if (pending || mints.length === 0) return null;
   return (
-    <div className="mt-3 flex flex-wrap gap-1.5">
+    <div className="mt-3 flex flex-wrap gap-2">
       {mints.map((m) => (
         <button
           key={m}
           type="button"
           onClick={() => onLoadMint(m)}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/35 bg-cyan-500/10 px-2.5 py-1.5 font-mono text-[11px] font-medium text-cyan-100/95 transition-colors hover:border-cyan-300/50 hover:bg-cyan-500/15"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/35 bg-cyan-500/10 px-3 py-1.5 font-mono text-[11px] font-medium text-cyan-100/95 transition-colors hover:border-cyan-300/50 hover:bg-cyan-500/15"
         >
           <Rocket className="size-3 shrink-0" strokeWidth={1.5} />
           Load chart {m.slice(0, 4)}…{m.slice(-4)}
@@ -225,74 +423,125 @@ function MintLoadButtons({
 function ApplyButtons({
   content,
   pending,
-  localWorkspaceConnected,
-  onDiff,
+  buildFlowState,
+  autoApplied,
   onApplyAll,
   onAddAlgo,
   onApplyConfig,
 }: {
   content: string;
   pending: boolean;
-  localWorkspaceConnected: boolean;
-  onDiff: (path: string, code: string) => void;
+  buildFlowState?: BuildFlowState;
+  autoApplied?: boolean;
   onApplyAll: (edits: { path: string; code: string }[]) => void;
   onAddAlgo: (name: string, description: string) => void;
   onApplyConfig: (patch: ReturnType<typeof parseConfigPatch>) => void;
 }) {
-  const edits = useMemo(() => parseChatEdits(content), [content]);
-  const algos = useMemo(() => parseAlgoBlocks(content), [content]);
-  const configPatch = useMemo(() => parseConfigPatch(content), [content]);
+  const artifacts = useMemo(() => parseBuildArtifacts(content), [content]);
+  const { edits, algos, configPatch, issues, validForApply } = artifacts;
+  const newEdits = useMemo(() => edits.filter((e) => e.isNew), [edits]);
+  const updatedEdits = useMemo(() => edits.filter((e) => !e.isNew), [edits]);
+  const createdFolders = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          newEdits
+            .map((e) => {
+              const i = e.path.lastIndexOf("/");
+              return i > 0 ? e.path.slice(0, i) : "";
+            })
+            .filter(Boolean),
+        ),
+      ),
+    [newEdits],
+  );
+  const responseTruncated = issues.some((x) => /max_tokens/i.test(x));
+  const blockedByState = buildFlowState === "build_running" || buildFlowState === "build_verifying";
+  const applyBlocked = blockedByState || !validForApply;
 
   if ((edits.length === 0 && algos.length === 0 && !configPatch) || pending) return null;
 
-  const fileLabel = localWorkspaceConnected ? "Write locally" : "Apply";
-  const fileCreateLabel = localWorkspaceConnected ? "Create locally" : "Create";
-
   return (
-    <div className="mt-3 flex flex-wrap gap-1.5">
+    <div className="mt-3 flex flex-wrap gap-2">
+      {responseTruncated && edits.length > 0 ? (
+        <p className="w-full rounded-lg border border-amber-500/35 bg-amber-500/8 px-3 py-2 text-[11px] text-amber-200/90">
+          Partial response detected (<code>max_tokens</code>). File edits may be incomplete — continue build before applying.
+        </p>
+      ) : null}
+      {issues.length > 0 ? (
+        <p className="w-full rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-200/90">
+          Build artifacts blocked: {issues[0]}
+        </p>
+      ) : null}
+      {blockedByState ? (
+        <p className="w-full rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-fill)] px-3 py-2 text-[11px] text-[var(--color-fg-dim)]">
+          Build is still running verification. Apply actions unlock when build is done.
+        </p>
+      ) : null}
       {/* Config patch → live knob update */}
       {configPatch ? (
         <button
           type="button"
           onClick={() => onApplyConfig(configPatch)}
+          disabled={applyBlocked}
           title="Update live knob values instantly — no deploy needed"
-          className="inline-flex items-center gap-1.5 rounded-lg border border-[color-mix(in_srgb,#22d3ee_30%,transparent)] bg-[color-mix(in_srgb,#22d3ee_8%,transparent)] px-2.5 py-1.5 font-mono text-[11px] font-medium text-cyan-300/80 transition-colors hover:border-[color-mix(in_srgb,#22d3ee_50%,transparent)] hover:text-cyan-200"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-[color-mix(in_srgb,#22d3ee_30%,transparent)] bg-[color-mix(in_srgb,#22d3ee_8%,transparent)] px-3 py-1.5 font-mono text-[11px] font-medium text-cyan-300/80 transition-colors hover:border-[color-mix(in_srgb,#22d3ee_50%,transparent)] hover:text-cyan-200"
         >
           <Check className="size-3 shrink-0" strokeWidth={2} />
           Apply to knobs
         </button>
       ) : null}
-      {edits.length > 1 ? (
-        <button
-          type="button"
-          onClick={() => onApplyAll(edits.map((e) => ({ path: e.path, code: e.code })))}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-sideBar)] px-2.5 py-1.5 font-mono text-[11px] font-medium text-[var(--color-fg-muted)] transition-colors hover:border-[rgba(255,255,255,0.15)] hover:text-[var(--color-fg)]"
-        >
-          <FilePen className="size-3 shrink-0" strokeWidth={1.5} />
-          {fileLabel} all ({edits.length} files)
-        </button>
+      {edits.length > 0 ? (
+        <div className="w-full rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-fill)] px-3 py-2">
+          <p className="mb-2 text-[11px] text-[var(--color-fg-muted)]">
+            {autoApplied
+              ? `Applied ${edits.length} file change${edits.length > 1 ? "s" : ""} automatically.`
+              : `Core build patch has ${edits.length} file change${edits.length > 1 ? "s" : ""}.`}
+          </p>
+          <p className="mb-2 text-[11px] text-[var(--color-fg-dim)]">
+            Includes: {newEdits.length} create{newEdits.length === 1 ? "" : "s"}{createdFolders.length > 0 ? ` in ${createdFolders.length} folder${createdFolders.length === 1 ? "" : "s"}` : ""}, {updatedEdits.length} update{updatedEdits.length === 1 ? "" : "s"}.
+          </p>
+          <details className="mb-2">
+            <summary className="cursor-pointer text-[11px] text-[var(--color-fg-dim)] hover:text-[var(--color-fg-muted)]">
+              Show change list
+            </summary>
+            <div className="mt-1 max-h-24 overflow-auto rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-bg-sideBar)] p-2 text-[10.5px] text-[var(--color-fg-dim)]">
+              {edits.map((e, i) => (
+                <div key={`${e.path}-${i}`}>
+                  {e.isNew ? "create" : "update"} {e.path}
+                </div>
+              ))}
+            </div>
+          </details>
+          {!autoApplied ? (
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => onApplyAll(edits.map((e) => ({ path: e.path, code: e.code })))}
+                disabled={applyBlocked}
+                title={responseTruncated ? "Response was truncated — continue build before applying." : undefined}
+                className={
+                  "inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-sideBar)] px-3 py-1.5 font-mono text-[11px] font-medium text-[var(--color-fg-muted)] transition-colors hover:border-[rgba(255,255,255,0.15)] hover:text-[var(--color-fg)] " +
+                  (applyBlocked ? "cursor-not-allowed opacity-45 hover:border-[var(--color-border)] hover:text-[var(--color-fg-muted)]" : "")
+                }
+              >
+                <Check className="size-3 shrink-0" strokeWidth={2} />
+                Apply now
+              </button>
+            </div>
+          ) : null}
+        </div>
       ) : null}
-      {edits.map((edit, i) => (
-        <button
-          key={i}
-          type="button"
-          title={edit.isNew ? `Create new file: ${edit.path}` : `Preview & apply: ${edit.path}`}
-          onClick={() => onDiff(edit.path, edit.code)}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-sideBar)] px-2.5 py-1.5 font-mono text-[11px] text-[var(--color-fg-muted)] transition-colors hover:border-[rgba(255,255,255,0.15)] hover:text-[var(--color-fg)]"
-        >
-          <FilePen className="size-3 shrink-0" strokeWidth={1.5} />
-          {edit.isNew ? fileCreateLabel : fileLabel} {edit.path}
-        </button>
-      ))}
       {algos.map((algo, i) => (
         <button
           key={`algo-${i}`}
           type="button"
-          title={`Add "${algo.name}" to your algo dropdown`}
+          title={`Add "${algo.name}" to Algo Lab`}
           onClick={() => onAddAlgo(algo.name, algo.description)}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-2.5 py-1.5 font-mono text-[11px] text-emerald-400/80 transition-colors hover:border-emerald-500/40 hover:text-emerald-300"
+          disabled={applyBlocked}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-3 py-1.5 font-mono text-[11px] text-emerald-400/80 transition-colors hover:border-emerald-500/40 hover:text-emerald-300"
         >
-          + Add algo: {algo.name}
+          + Add to Algo Lab: {algo.name}
         </button>
       ))}
     </div>
@@ -302,13 +551,20 @@ function ApplyButtons({
 function FollowupPills({ followups, onSend }: { followups: string[]; onSend: (text: string) => void }) {
   if (followups.length === 0) return null;
   return (
-    <div className="mt-3 flex flex-wrap gap-1.5">
+    <div className="mt-3 flex flex-wrap gap-2">
       {followups.map((f, i) => (
         <button
           key={i}
           type="button"
-          onClick={() => onSend(f)}
-          className="rounded-full border border-[var(--color-border-subtle)] px-2.5 py-1 text-[11px] text-[var(--color-fg-dim)] hover:border-[rgba(255,255,255,0.12)] hover:text-[var(--color-fg-muted)]"
+          onClick={() => {
+            onSend(f);
+            // Keep keyboard flow smooth after quick actions
+            requestAnimationFrame(() => {
+              const el = document.querySelector("#chat-panel textarea") as HTMLTextAreaElement | null;
+              el?.focus();
+            });
+          }}
+          className="rounded-full border border-[var(--color-border-subtle)] bg-[color-mix(in_srgb,var(--color-fill)_68%,transparent)] px-3 py-1 text-[11px] text-[var(--color-fg-dim)] hover:border-[rgba(255,255,255,0.12)] hover:text-[var(--color-fg-muted)]"
         >
           {f}
         </button>
@@ -365,66 +621,162 @@ function ChatTurnSection({
   turn,
   isLatestTurn,
   pending,
+  buildFlowState,
+  autoApplied,
   copiedId,
   commitResults,
   githubWorkspace,
-  localWorkspaceConnected,
   onCopy,
-  onDiff,
   onApplyAll,
   onAddAlgo,
   onApplyConfig,
   onSend,
+  onEdit,
   onDismissCommit,
   onLoadMint,
 }: {
   turn: ChatTurn;
   isLatestTurn: boolean;
   pending: boolean;
+  buildFlowState?: BuildFlowState;
+  autoApplied?: boolean;
   copiedId: string | null;
   commitResults: Map<string, CommitResult>;
   githubWorkspace: { token: string; owner: string; repo: string; branch: string };
-  localWorkspaceConnected: boolean;
   onCopy: (id: string, content: string) => void;
-  onDiff: (path: string, code: string) => void;
   onApplyAll: (edits: { path: string; code: string }[]) => void;
   onAddAlgo: (name: string, description: string) => void;
   onApplyConfig: (patch: ReturnType<typeof parseConfigPatch>) => void;
   onSend: (text: string) => void;
+  onEdit: (userMsgId: string, newText: string) => void;
   onDismissCommit: (msgId: string) => void;
   onLoadMint: (mint: string) => void;
 }) {
   const asst = turn.assistant;
   const commitResult = asst ? commitResults.get(asst.id) : undefined;
 
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState("");
+  const [revertPending, setRevertPending] = useState(false);
+
   const { followups, cleanContent } = useMemo(
     () => (asst ? parseSuggestedFollowups(asst.content) : { followups: [], cleanContent: "" }),
     [asst],
   );
 
+  function startEdit() {
+    setEditText(turn.user.content);
+    setEditing(true);
+    setRevertPending(false);
+  }
+
+  function cancelEdit() {
+    setEditing(false);
+    setRevertPending(false);
+  }
+
+  function commitEdit() {
+    const trimmed = editText.trim();
+    if (!trimmed || trimmed === turn.user.content) { cancelEdit(); return; }
+    setRevertPending(true);
+  }
+
+  function handleEditKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commitEdit(); }
+    if (e.key === "Escape") cancelEdit();
+  }
+
+  function confirmRevert() {
+    onEdit(turn.user.id, editText.trim());
+    setEditing(false);
+    setRevertPending(false);
+  }
+
+  function declineRevert() {
+    // Keep editing=true so the user returns to the textarea rather than losing their edit.
+    setRevertPending(false);
+  }
+
   return (
     <section data-chat-turn-id={turn.user.id} className="shrink-0" style={{ scrollMarginTop: 12 }}>
       {/* User bubble */}
-      <div className="mb-3 flex justify-end">
-        <div
-          className="max-w-[88%] rounded-2xl rounded-tr-sm px-3.5 py-2.5"
-          style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)" }}
-        >
-          <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--color-fg)]">
-          {turn.user.content}
-        </p>
+      <div className="group/user mb-3 flex justify-end">
+        <div className="relative max-w-[88%]">
+          {/* Edit icon — shown on hover when not already editing */}
+          {!editing && !pending && (
+            <button
+              type="button"
+              title="Edit message"
+              onClick={startEdit}
+              className="absolute -left-7 top-1/2 -translate-y-1/2 rounded-md p-1 text-[var(--color-fg-dim)] opacity-0 transition-opacity hover:bg-[var(--color-fill)] hover:text-[var(--color-fg-muted)] group-hover/user:opacity-100"
+            >
+              <Pencil className="size-3.5" strokeWidth={2} />
+            </button>
+          )}
+
+          {editing ? (
+            <div className="w-full min-w-[240px]">
+              <textarea
+                autoFocus
+                value={editText}
+                onChange={(e) => setEditText(e.target.value)}
+                onKeyDown={handleEditKeyDown}
+                rows={Math.min(8, editText.split("\n").length + 1)}
+                className="w-full resize-none rounded-2xl rounded-tr-sm px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--color-fg)] outline-none"
+                style={{ background: "rgba(255,255,255,0.09)", border: "1px solid rgba(96,165,250,0.45)" }}
+              />
+              <div className="mt-1 flex gap-2 justify-end text-[11px]">
+                <button type="button" onClick={cancelEdit} className="px-2 py-0.5 rounded text-[var(--color-fg-dim)] hover:text-[var(--color-fg)]">Cancel</button>
+                <button type="button" onClick={commitEdit} className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 hover:bg-blue-500/30">Save · Enter</button>
+              </div>
+            </div>
+          ) : (
+            <div className="unt-chat-user-bubble rounded-2xl rounded-tr-sm px-3.5 py-2.5">
+              <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--color-fg)]">
+                {turn.user.content}
+              </p>
+            </div>
+          )}
+
+          {/* Revert confirmation popup */}
+          {revertPending && (
+            <div
+              className="absolute right-0 top-full z-50 mt-1.5 w-64 rounded-xl p-3 shadow-xl"
+              style={{ background: "var(--color-bg-sideBar)", border: "1px solid rgba(255,255,255,0.12)" }}
+            >
+              <p className="mb-2.5 text-[12px] leading-snug text-[var(--color-fg-muted)]">
+                Resending will remove all messages after this one.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={declineRevert}
+                  className="flex-1 rounded-lg py-1.5 text-[12px] font-medium text-[var(--color-fg-dim)] hover:bg-[var(--color-fill)]"
+                >
+                  Don't Revert
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmRevert}
+                  className="flex-1 rounded-lg bg-blue-500/20 py-1.5 text-[12px] font-medium text-blue-300 hover:bg-blue-500/30"
+                >
+                  Revert &amp; Resend
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       {/* Assistant reply */}
         {asst ? (
-          <div className="group/resp relative">
+          <div className="group/resp relative rounded-xl border border-[var(--color-border-subtle)] bg-[color-mix(in_srgb,var(--color-fill)_72%,transparent)] px-3.5 py-3">
             {asst.content.length > 0 ? (
               <button
                 type="button"
                 title="Copy"
                 onClick={() => void onCopy(asst.id, asst.content)}
-              className="absolute right-0 top-0 z-[20] rounded-md p-1 text-[var(--color-fg-dim)] opacity-0 transition-opacity hover:bg-[var(--color-fill)] hover:text-[var(--color-fg-muted)] group-hover/resp:opacity-100"
+              className="absolute right-2 top-2 z-[20] rounded-md p-1 text-[var(--color-fg-dim)] opacity-0 transition-opacity hover:bg-[var(--color-fill)] hover:text-[var(--color-fg-muted)] group-hover/resp:opacity-100"
             >
               {copiedId === asst.id ? <Check className="size-3.5" strokeWidth={2} /> : <Copy className="size-3.5" strokeWidth={2} />}
               </button>
@@ -446,8 +798,8 @@ function ChatTurnSection({
               <ApplyButtons
                 content={asst.content}
                 pending={pending && isLatestTurn}
-                localWorkspaceConnected={localWorkspaceConnected}
-                onDiff={onDiff}
+                buildFlowState={buildFlowState}
+                autoApplied={autoApplied}
                 onApplyAll={onApplyAll}
                 onAddAlgo={onAddAlgo}
                 onApplyConfig={onApplyConfig}
@@ -465,10 +817,12 @@ function ChatTurnSection({
             )}
           </div>
         ) : pending && isLatestTurn ? (
-        <div className="flex items-center gap-2 py-1 text-[12px] text-[var(--color-fg-dim)]">
+        <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[color-mix(in_srgb,var(--color-fill)_68%,transparent)] px-3.5 py-3">
+          <div className="flex items-center gap-2 text-[12px] text-[var(--color-fg-dim)]">
           <Loader2 className="size-3.5 animate-spin" strokeWidth={2} />
           <span>Connecting…</span>
           </div>
+        </div>
         ) : null}
     </section>
   );
@@ -480,12 +834,12 @@ function StandaloneAssistantIntro({ messages, copiedId, onCopy }: { messages: Ch
     <div className="flex flex-col gap-4 pb-2">
       {messages.map((asst) => (
         <section key={asst.id} className="shrink-0">
-          <div className="group/resp relative">
+          <div className="group/resp relative rounded-xl border border-[var(--color-border-subtle)] bg-[color-mix(in_srgb,var(--color-fill)_72%,transparent)] px-3.5 py-3">
             <button
               type="button"
               title="Copy"
               onClick={() => void onCopy(asst.id, asst.content)}
-              className="absolute right-0 top-0 z-[20] rounded-md p-1 text-[var(--color-fg-dim)] opacity-0 transition-opacity hover:bg-[var(--color-fill)] hover:text-[var(--color-fg-muted)] group-hover/resp:opacity-100"
+              className="absolute right-2 top-2 z-[20] rounded-md p-1 text-[var(--color-fg-dim)] opacity-0 transition-opacity hover:bg-[var(--color-fill)] hover:text-[var(--color-fg-muted)] group-hover/resp:opacity-100"
             >
               {copiedId === asst.id ? <Check className="size-3.5" strokeWidth={2} /> : <Copy className="size-3.5" strokeWidth={2} />}
             </button>
@@ -565,11 +919,76 @@ function DeployBadge({ run }: { run: WorkflowRunStatus | null | undefined }) {
   );
 }
 
+// ─── Model footer bar ────────────────────────────────────────────────────────
+function ModelFooterBar({
+  model,
+  onSetModel,
+  showMissingKey,
+}: {
+  model: ModelSettings;
+  onSetModel: (patch: Partial<ModelSettings>) => void;
+  showMissingKey: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const backendId: LlmBackendId = useMemo(() => {
+    const id = model.llmBackendId as LlmBackendId | undefined;
+    if (id && LLM_BACKENDS.some((b) => b.id === id)) return id;
+    return inferBackendIdFromBaseUrl(model.baseUrl) ?? "anthropic";
+  }, [model.llmBackendId, model.baseUrl]);
+  const backend = getLlmBackend(backendId);
+
+  const modelLabel = model.model || backend.defaultModel;
+
+  return (
+    <div className="relative mb-1.5 px-1">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className={[
+          "flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors",
+          showMissingKey
+            ? "border border-amber-400/25 bg-amber-500/8 hover:bg-amber-500/12"
+            : "border border-[var(--color-border-subtle)] bg-[var(--color-fill)] hover:border-[var(--color-border)]",
+        ].join(" ")}
+      >
+        <span className={`size-1.5 shrink-0 rounded-full ${showMissingKey ? "bg-amber-400/70" : "bg-emerald-400/70"}`} />
+        {showMissingKey ? (
+          <span className="flex-1 text-[11px] text-amber-300/70">No API key — tap to connect LLM</span>
+        ) : (
+          <>
+            <span className="text-[10px] text-[var(--color-fg-dim)]">{backend.providerLabel}</span>
+            <span className="text-[var(--color-fg-dim)] opacity-30">·</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-[var(--color-fg-muted)]">{modelLabel}</span>
+          </>
+        )}
+        <svg className="h-3 w-3 shrink-0 text-[var(--color-fg-dim)] opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125" />
+        </svg>
+      </button>
+
+      {open && (
+        <div
+          className="absolute bottom-full left-0 right-0 z-50 mb-1.5 max-h-[70vh] overflow-y-auto rounded-xl p-3 shadow-2xl"
+          style={{ background: "var(--color-bg-sideBar)", border: "1px solid rgba(255,255,255,0.1)" }}
+        >
+          <p className="mb-3 text-[11px] font-semibold text-[var(--color-fg)]">LLM settings</p>
+          <LlmConnectCard
+            model={model}
+            onSave={(patch) => { onSetModel(patch); setOpen(false); }}
+            onCancel={() => setOpen(false)}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main ChatPanel ───────────────────────────────────────────────────────────
 
 export function ChatPanel() {
   const {
     model: globalModel,
+    setModel,
     chatSessions,
     activeChatId,
     setActiveChatId,
@@ -580,13 +999,14 @@ export function ChatPanel() {
     messages,
     appendMessage,
     updateMessage,
+    truncateMessagesAfter,
     clearChat,
     setComposerBusy,
-    openSetupPanel,
     navigateChartToMint,
     chartAnalytics,
     selectedAlgoId,
     userAlgos,
+    algoBlueprints,
     tradingMode,
     openFilePath,
     openFileContent,
@@ -598,8 +1018,10 @@ export function ChatPanel() {
     addUserAlgo,
     githubWorkspace,
     localWorkspaceHandle,
-    pendingLocalEdits,
-    pushPendingToGitHub,
+    algoSessionActive,
+    tradingHalted,
+    scalperLiveBuySol,
+    tradingSessions,
   } = useApp();
 
   // Effective model = session override merged onto global
@@ -615,22 +1037,74 @@ export function ChatPanel() {
   const [applyingPaths, setApplyingPaths] = useState<string[]>([]);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [commitResults, setCommitResults] = useState<Map<string, CommitResult>>(new Map());
+  const [appliedBackups, setAppliedBackups] = useState<Map<string, AppliedFileBackup[]>>(new Map());
   const [diffState, setDiffState] = useState<DiffState>(null);
   const [diffOriginal, setDiffOriginal] = useState<string | null>(null);
-  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffLoading] = useState(false);
   const [deployStatus] = useState<WorkflowRunStatus | null | undefined>(undefined);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [atQuery, setAtQuery] = useState<string | null>(null);
   const [atMentionedPaths, setAtMentionedPaths] = useState<string[]>([]);
+  const [workspaceReady, setWorkspaceReady] = useState(false);
+  const [localIdeAgentReady, setLocalIdeAgentReady] = useState(false);
+  const [pendingBuildRequest, setPendingBuildRequest] = useState<string | null>(null);
+  const [buildFlowState, setBuildFlowState] = useState<BuildFlowState>("chat");
+  const [autoAppliedMessageIds, setAutoAppliedMessageIds] = useState<Set<string>>(new Set());
+  const [rollbackBusy, setRollbackBusy] = useState(false);
 
   const [attachedImages, setAttachedImages] = useState<string[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
+  const chatLive = Boolean(localWorkspaceHandle && workspaceReady && localIdeAgentReady);
 
   const abortRef = useRef<AbortController | null>(null);
+  const buildFlowStateRef = useRef<BuildFlowState>("chat");
   const feedScrollRef = useRef<HTMLDivElement>(null);
   const isInitialFeedLayout = useRef(true);
+  // true when the user has manually scrolled up mid-stream — stops auto-follow
+  const userScrolledUpRef = useRef(false);
+  const prevPendingRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  function transitionBuildFlow(to: BuildFlowState) {
+    const from = buildFlowStateRef.current;
+    if (!canTransitionBuildFlow(from, to)) return;
+    buildFlowStateRef.current = to;
+    setBuildFlowState(to);
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    async function checkWorkspaceReady() {
+      if (!localWorkspaceHandle) {
+        setWorkspaceReady(false);
+        return;
+      }
+      try {
+        await readLocalFile(localWorkspaceHandle, "package.json");
+        if (!cancelled) setWorkspaceReady(true);
+      } catch {
+        if (!cancelled) setWorkspaceReady(false);
+      }
+    }
+    void checkWorkspaceReady();
+    return () => { cancelled = true; };
+  }, [localWorkspaceHandle]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function checkLocalIdeAgent() {
+      try {
+        const res = await fetch("/__agent/status");
+        if (!cancelled) setLocalIdeAgentReady(res.ok);
+      } catch {
+        if (!cancelled) setLocalIdeAgentReady(false);
+      }
+    }
+    void checkLocalIdeAgent();
+    const id = window.setInterval(() => void checkLocalIdeAgent(), 10_000);
+    return () => { cancelled = true; window.clearInterval(id); };
+  }, []);
 
   // ── Deploy status ──────────────────────────────────────────────────
   // Deploy status polling removed — Vercel auto-deploys on push, no workflow file needed.
@@ -648,25 +1122,91 @@ export function ChatPanel() {
   const turns = useMemo(() => groupTurns(conversation), [conversation]);
   const latestUserId = turns.at(-1)?.user.id ?? null;
 
+  // When a NEW user turn arrives, scroll to the bottom immediately so the
+  // assistant response is visible from the start (not the user message top).
   useLayoutEffect(() => {
     const feed = feedScrollRef.current;
     if (!latestUserId || !feed) return;
     if (isInitialFeedLayout.current) { isInitialFeedLayout.current = false; return; }
-    const id = latestUserId;
+    userScrolledUpRef.current = false;
+    // Small rAF loop to let the DOM settle before scrolling
     let raf = 0; let cancelled = false; let frames = 0;
     const step = () => {
       if (cancelled) return;
-      scrollTurnToTop(feed, id);
+      feed.scrollTop = feed.scrollHeight;
       frames += 1;
-      if (frames < 6) raf = requestAnimationFrame(step);
+      if (frames < 4) raf = requestAnimationFrame(step);
     };
-    scrollTurnToTop(feed, id);
+    feed.scrollTop = feed.scrollHeight;
     raf = requestAnimationFrame(step);
     return () => { cancelled = true; cancelAnimationFrame(raf); };
   }, [latestUserId]);
 
-  // Reset scroll ref on tab switch
-  useEffect(() => { isInitialFeedLayout.current = true; }, [activeChatId]);
+  // While streaming, keep following the bottom — unless the user scrolled up.
+  useEffect(() => {
+    if (!pending || userScrolledUpRef.current) return;
+    const feed = feedScrollRef.current;
+    if (!feed) return;
+    feed.scrollTop = feed.scrollHeight;
+  }); // no dep array — runs after every render during streaming
+
+  // Keep viewport pinned to latest answer when streaming completes.
+  // Without this, post-stream UI (followups/apply buttons) can push content down
+  // and make the view appear to jump upward right as typing ends.
+  useEffect(() => {
+    const feed = feedScrollRef.current;
+    if (!feed) {
+      prevPendingRef.current = pending;
+      return;
+    }
+
+    const wasPending = prevPendingRef.current;
+    if (wasPending && !pending && !userScrolledUpRef.current) {
+      requestAnimationFrame(() => {
+        const f = feedScrollRef.current;
+        if (!f || userScrolledUpRef.current) return;
+        f.scrollTop = f.scrollHeight;
+      });
+    }
+
+    prevPendingRef.current = pending;
+  }, [pending, messages.length]);
+
+  // Detect manual upward scroll during streaming → stop auto-follow.
+  // Detect scroll back to bottom → resume auto-follow.
+  useEffect(() => {
+    const feed = feedScrollRef.current;
+    if (!feed) return;
+    const onScroll = () => {
+      const distFromBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight;
+      if (distFromBottom > 80) {
+        userScrolledUpRef.current = true;
+      } else {
+        userScrolledUpRef.current = false;
+      }
+    };
+    feed.addEventListener("scroll", onScroll, { passive: true });
+    return () => feed.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // Keyboard ergonomics: pressing PageDown/End while feed is focused should
+  // keep chat navigation smooth, especially during streaming updates.
+  useEffect(() => {
+    const feed = feedScrollRef.current;
+    if (!feed) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "End") {
+        e.preventDefault();
+        feed.scrollTop = feed.scrollHeight;
+        userScrolledUpRef.current = false;
+      }
+    };
+    feed.addEventListener("keydown", onKeyDown);
+    return () => feed.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // Reset on tab switch
+  useEffect(() => { isInitialFeedLayout.current = true; userScrolledUpRef.current = false; }, [activeChatId]);
 
   // ── Apply helpers ─────────────────────────────────────────────────
   async function applyOne(
@@ -675,6 +1215,28 @@ export function ChatPanel() {
     targetMsgId?: string,
   ): Promise<string | null> {
     try {
+      let previousContent: string | null = null;
+      let existedBefore = false;
+      // Capture pre-edit content so "Revert & Resend" can restore actual code.
+      if (targetMsgId) {
+        try {
+          if (localWorkspaceHandle) {
+            previousContent = await readLocalFile(localWorkspaceHandle, path);
+            existedBefore = true;
+          } else {
+            const { token, owner, repo, branch } = githubWorkspace;
+            if (token && owner && repo) {
+              const result = await githubGetFileContent(token, owner, repo, branch || "main", path);
+              previousContent = result.text;
+              existedBefore = true;
+            }
+          }
+        } catch {
+          previousContent = null;
+          existedBefore = false;
+        }
+      }
+
       const sha = await applyFileEdit(path, code);
       if (targetMsgId) {
         setCommitResults((prev) => {
@@ -687,6 +1249,15 @@ export function ChatPanel() {
           }
           return next;
         });
+        setAppliedBackups((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(targetMsgId) ?? [];
+          if (!existing.some((b) => b.path === path)) {
+            existing.push({ path, previousContent, existedBefore });
+          }
+          next.set(targetMsgId, existing);
+          return next;
+        });
       }
       return sha;
     } catch (e) {
@@ -695,42 +1266,31 @@ export function ChatPanel() {
     }
   }
 
-  async function openDiff(path: string, code: string) {
-    const { token, owner, repo, branch } = githubWorkspace;
-    setDiffState({ path, code, original: "" });
-    setDiffLoading(true);
-    try {
-      if (token && owner && repo) {
-        const { text } = await githubGetFileContent(token, owner, repo, branch || "main", path);
-        setDiffOriginal(text);
-      } else {
-        setDiffOriginal("");
-      }
-    } catch {
-      setDiffOriginal("");
-    } finally {
-      setDiffLoading(false);
-      setDiffState((prev) => prev && { ...prev });
-    }
-  }
-
   function handleApplyConfig(patch: ReturnType<typeof parseConfigPatch>) {
     if (!patch) return;
     setScalperUserConfig(patch);
   }
 
-  const [pushingToGitHub, setPushingToGitHub] = useState(false);
-  const [pushError, setPushError] = useState<string | null>(null);
-
-  async function handlePushToGitHub() {
-    setPushingToGitHub(true);
-    setPushError(null);
+  async function rollbackLatestEdit() {
+    if (!localIdeAgentReady || rollbackBusy) return;
+    setRollbackBusy(true);
+    setApplyError(null);
     try {
-      await pushPendingToGitHub();
+      const res = await fetch("/__agent/tool", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tool: "rollback_edit", input: {} }),
+      });
+      const data = await res.json() as { ok?: boolean; content?: string; error?: string };
+      if (!res.ok || data.ok === false) {
+        setApplyError(data.content ?? data.error ?? "Rollback failed.");
+        return;
+      }
+      setApplyError(data.content ?? "Rolled back latest edit.");
     } catch (e) {
-      setPushError(e instanceof Error ? e.message : String(e));
+      setApplyError(e instanceof Error ? e.message : String(e));
     } finally {
-      setPushingToGitHub(false);
+      setRollbackBusy(false);
     }
   }
 
@@ -745,6 +1305,38 @@ export function ChatPanel() {
     }
     setApplyingPaths([]);
     if (lastSha) void fetchDeployStatus();
+  }
+
+  async function autoApplyCoreBuildArtifacts(messageId: string, content: string) {
+    const artifacts = parseBuildArtifacts(content);
+    if (!artifacts.validForApply || artifacts.edits.length === 0) return;
+    await handleApplyAll(
+      artifacts.edits.map((e) => ({ path: e.path, code: e.code })),
+      messageId,
+    );
+    setAutoAppliedMessageIds((prev) => {
+      const next = new Set(prev);
+      next.add(messageId);
+      return next;
+    });
+  }
+
+  async function restoreBackupsForAssistantMessages(messageIds: string[]) {
+    for (const msgId of messageIds) {
+      const backups = appliedBackups.get(msgId);
+      if (!backups || backups.length === 0) continue;
+      for (const backup of backups) {
+        if (backup.existedBefore && backup.previousContent != null) {
+          await applyOne(backup.path, backup.previousContent);
+        } else {
+          // We currently do not support hard-delete in this flow.
+          // Keep a visible warning so the user knows why a created file remains.
+          setApplyError(
+            `Revert warning: ${backup.path} was newly created, and automatic file deletion is not enabled. Remove it manually if needed.`,
+          );
+        }
+      }
+    }
   }
 
   // ── @ mention handling ────────────────────────────────────────────
@@ -800,22 +1392,25 @@ export function ChatPanel() {
   const apiKeyOptional = presetAllowsOptionalApiKey(model) || isLikelyLocalLlm(model.baseUrl);
   const showMissingKeyBanner = !apiKeyOptional && !model.apiKey.trim();
 
-  function openSetupForLlm() {
-    openSetupPanel();
-  }
-
   function stopGeneration() {
     abortRef.current?.abort();
     abortRef.current = null;
     setPending(false);
     setComposerBusy(false);
+    transitionBuildFlow("chat");
   }
 
-  async function send(textOverride?: string) {
+  async function send(
+    textOverride?: string,
+    priorOverride?: typeof messages,
+    opts?: { forceBuild?: boolean },
+  ) {
     const text = (textOverride ?? input).trim();
     if ((!text && attachedImages.length === 0) || pending) return;
 
-    const prior = messages;
+    // Use priorOverride when provided (e.g. message edit path) so the API
+    // receives the correctly-truncated history even before React flushes state.
+    const prior = priorOverride ?? messages;
     appendMessage({ role: "user", content: text || "(image)" });
     const capturedImages = attachedImages;
     setInput("");
@@ -853,17 +1448,95 @@ export function ChatPanel() {
 
     const assistantId = appendMessage({ role: "assistant", content: "" });
 
-    // Build history
-    const history = [
-      ...prior.map((m) => ({ role: m.role, content: m.content })),
-      { role: "user" as const, content: text },
-    ];
+    const explicitBuildCommand = isExplicitBuildCommand(text);
+    const confirmationYes = Boolean(
+      pendingBuildRequest && (isBuildConfirmationYes(text) || explicitBuildCommand),
+    );
+    const confirmationNo = Boolean(pendingBuildRequest && isBuildConfirmationNo(text));
+    if (confirmationNo) {
+      setPendingBuildRequest(null);
+      transitionBuildFlow("chat");
+      updateMessage(assistantId, {
+        content: "Got it — staying in chat mode. Tell me what you want to refine before we build.",
+      });
+      abortRef.current = null;
+      setPending(false);
+      setComposerBusy(false);
+      return;
+    }
 
-    // Fetch @mentioned files — prefer local workspace (instant disk read) over GitHub.
+    const taskText = confirmationYes && pendingBuildRequest ? pendingBuildRequest : text;
+    if (confirmationYes) setPendingBuildRequest(null);
+    const investigationIntent = isCodeInvestigationIntent(taskText);
+    const explicitBuildIntent = isExplicitBuildCommand(taskText);
+    const potentialBuildIntent = isPotentialBuildIntent(taskText) && !investigationIntent;
+    const effectiveMode: ChatMode =
+      (opts?.forceBuild || confirmationYes || explicitBuildIntent || investigationIntent)
+        ? "build"
+        : "chat";
+    const capability = buildCapability({ localIdeAgentReady, localWorkspaceHandle, workspaceReady });
+    const isAnthropicProvider = isAnthropicMessagesApiBaseUrl(model.baseUrl);
+    if (potentialBuildIntent && !explicitBuildIntent && !confirmationYes && !opts?.forceBuild) {
+      setPendingBuildRequest(taskText);
+      transitionBuildFlow("build_confirm_pending");
+      updateMessage(assistantId, {
+        content:
+          `Ready to build this now?\n\n` +
+          `Reply **yes** to start build mode automatically, or **no** to keep planning in chat.`,
+      });
+      abortRef.current = null;
+      setPending(false);
+      setComposerBusy(false);
+      return;
+    }
+    if (effectiveMode === "build") transitionBuildFlow("build_running");
+    else transitionBuildFlow("chat");
+    if (effectiveMode === "build" && !isAnthropicProvider) {
+      transitionBuildFlow("build_failed");
+      updateMessage(assistantId, {
+        content:
+          `Build is not available with ${model.providerLabel || "this model"} yet.\n\n` +
+          "This provider can chat, but SolClaw's autonomous IDE tools are currently wired through Anthropic. Switch to an Anthropic model for file edits, or use Chat mode to keep blueprinting.",
+      });
+      abortRef.current = null;
+      setPending(false);
+      setComposerBusy(false);
+      return;
+    }
+    if (effectiveMode === "build" && capability === "blocked") {
+      transitionBuildFlow("build_failed");
+      updateMessage(assistantId, {
+        content: buildBlockedMessage(capability, Boolean(localWorkspaceHandle)),
+      });
+      abortRef.current = null;
+      setPending(false);
+      setComposerBusy(false);
+      return;
+    }
+    const shouldUseCodeAgent =
+      effectiveMode === "build" &&
+      capability !== "blocked";
+
+    // Fetch only files explicitly mentioned in the current message. Historical
+    // auto-loading caused old file context to grow invisibly across turns.
+    const allMentionedPaths = [
+      ...new Set(atMentionedPaths),
+    ].slice(0, 3);
     let mentionContext = "";
-    if (atMentionedPaths.length > 0) {
+    if (allMentionedPaths.length > 0) {
+      const noWorkspace = !localWorkspaceHandle && (!githubWorkspace.token || !githubWorkspace.owner || !githubWorkspace.repo);
+      if (noWorkspace) {
+        // Surface a clear error instead of silently dropping file context
+        updateMessage(assistantId, {
+          content: `⚠️ Can't read @-mentioned files — no workspace connected.\n\nTo include file contents in chat:\n- **Local (instant):** Setup → "Connect local workspace folder"\n- **GitHub:** Setup → paste PAT + owner/repo`,
+        });
+        setPending(false);
+        setComposerBusy(false);
+        abortRef.current = null;
+        return;
+      }
       const snippets: string[] = [];
-      for (const p of atMentionedPaths.slice(0, 5)) {
+      for (const p of allMentionedPaths) {
         if (abort.signal.aborted) break;
         try {
           let fileText: string;
@@ -871,12 +1544,11 @@ export function ChatPanel() {
             fileText = await readLocalFile(localWorkspaceHandle, p);
           } else {
             const { token, owner, repo, branch } = githubWorkspace;
-            if (!token || !owner || !repo) continue;
             const result = await githubGetFileContent(token, owner, repo, branch || "main", p);
             fileText = result.text;
           }
           snippets.push(`### @${p}\n\`\`\`\n${fileText.slice(0, 4000)}\n\`\`\``);
-        } catch { /* skip */ }
+        } catch { /* skip unreachable paths */ }
       }
       if (snippets.length) mentionContext = "\n\n## @mentioned files\n" + snippets.join("\n\n");
     }
@@ -890,52 +1562,80 @@ export function ChatPanel() {
       return;
     }
 
-    // ── API grounding (local workspace only) ─────────────────────────
-    // Ship the actual exports digest + full src/types.ts so the LLM can't
-    // hallucinate hooks, types, or imports that don't exist in this codebase.
+    // ── API grounding ────────────────────────────────────────────────
+    // Do not preload a repo-wide exports digest. Build mode has search/read
+    // tools; broad digests are the core source of rate-limit pressure.
     let apiSurfaceContext = "";
-    if (localWorkspaceHandle) {
-      try {
-        const [digest, typesSrc] = await Promise.all([
-          buildLocalExportsDigest(localWorkspaceHandle).catch(() => ({} as Record<string, string[]>)),
-          readLocalFile(localWorkspaceHandle, "src/types.ts").catch(() => ""),
-        ]);
-        const digestLines = Object.entries(digest)
-          .filter(([p]) => p.startsWith("src/"))
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([p, names]) => `- \`${p}\`: ${names.join(", ")}`)
-          .join("\n");
-        const parts: string[] = [
-          "\n\n## Real exports in this repo (authoritative — do NOT invent names)",
-          "Every symbol you import MUST appear in this list. If it doesn't, stop and ask the user to @-mention the file.",
-          digestLines || "(digest empty — local workspace may have just been connected)",
-        ];
-        if (typesSrc) {
-          parts.push("\n### Full content of `src/types.ts` (small, always shipped)");
-          parts.push("```typescript\n" + typesSrc + "\n```");
-        }
-        apiSurfaceContext = parts.join("\n");
-      } catch { /* local workspace permission lapsed — skip */ }
+    let digestPaths: string[] = [];
+    if (shouldUseCodeAgent) {
+      apiSurfaceContext =
+        "\n\n## Repo context policy\n" +
+        "- Do not assume the full repo is in the prompt.\n" +
+        "- Use search_code/list_files/read_file to retrieve only the files needed for this task.\n" +
+        "- Prefer targeted retrieval over broad exploration.";
     }
+
+    // Avoid using a generated repo digest as a fallback file tree.
+    const effectiveFilePaths = workspaceFilePaths.length > 0 ? workspaceFilePaths : digestPaths;
+    const includeTradingDetails = needsTradingContext(taskText);
+    const includeWorkspaceDetails = needsWorkspaceContext(taskText);
+    const includeOpenFile = includeWorkspaceDetails || allMentionedPaths.length > 0;
 
     const liveContext = buildLiveContext({
       chartAnalytics,
       selectedAlgoId,
       userAlgos,
+      algoBlueprints,
       tradingMode,
       openFilePath,
       openFileContent,
-      workspaceFilePaths,
+      workspaceFilePaths: effectiveFilePaths,
       bounceZones,
       scalperUserConfig,
+      algoSessionActive,
+      tradingHalted,
+      scalperLiveBuySol,
+      tradingSessions,
+    }, {
+      includeTradingDetails,
+      includeSessionDetails: includeTradingDetails,
+      includeWorkspaceDetails,
+      includeOpenFile,
     });
+    const trimmedLiveContext = clipMiddle(liveContext, MAX_LIVE_CONTEXT_CHARS, "live context");
+
+    const workspaceContext = shouldUseCodeAgent
+      ? capability === "full-ide"
+        ? `\n\n## Active local IDE agent\n- Status: enabled through Vite /__agent endpoints\n- Tools: read_file, write_file, list_files, search_code, run_typecheck, run_build\n- Scope: exact repo currently served by localhost/Vite\n- After meaningful edits, run_typecheck before claiming success.`
+        : `\n\n## Active local workspace (write-only)\n- Folder: ${localWorkspaceHandle?.name ?? "connected workspace"}\n- Browser file tools: read_file, write_file, list_files\n- Not available in this mode: search_code, run_typecheck, run_build, DOM checks, console checks, rollback_edit\n- Make small, targeted edits and clearly say verification is limited to read-back.`
+      : "\n\n## Active mode\n- Blueprint/chat mode: respond from the user's request and live app state only. Do not inspect files.";
 
     const systemContent =
-      buildComposerSystemPrompt(githubWorkspace) +
+      clipMiddle(
+      buildComposerSystemPrompt(
+        githubWorkspace,
+        shouldUseCodeAgent
+          ? investigationIntent && !explicitBuildIntent
+            ? "Code investigation mode for this turn. Inspect/analyze code and explain findings. Do not propose or apply edits unless user explicitly asks to build."
+            : "Build mode is bounded single-pass for this turn. Retrieved file context is injected by host; do not emit tool traces like <tool_call> or claim you are exploring."
+          : "Blueprint/chat mode for this turn. Do not explore the codebase, do not call tools, and do not say you will inspect files. Help the user shape the algo idea into a concise blueprint/spec first. Only discuss implementation if the user explicitly asks to edit code or build it.",
+        effectiveMode === "build" ? "build" : "chat",
+      ) +
       "\n\n---\n" +
-      liveContext +
-      apiSurfaceContext +
-      mentionContext;
+      trimmedLiveContext +
+      workspaceContext +
+      clipMiddle(apiSurfaceContext, MAX_REPO_POLICY_CHARS, "repo policy") +
+      clipMiddle(mentionContext, MAX_MENTION_CONTEXT_CHARS, "@mentioned files"),
+      MAX_ANTHROPIC_SYSTEM_CHARS,
+      "system context",
+    );
+    const historyForRequest = trimHistoryByChars(
+      [
+        ...prior.map((m) => ({ role: m.role, content: m.content })),
+        { role: "user" as const, content: taskText },
+      ],
+      MAX_ANTHROPIC_HISTORY_CHARS,
+    );
 
     // ── Guaranteed status so the bubble is never empty on error ──────
     const setStatus = (msg: string) => updateMessage(assistantId, { content: msg });
@@ -949,7 +1649,67 @@ export function ChatPanel() {
           "x-api-key": trimmedKey,
           "anthropic-dangerous-direct-browser-access": "true",
         };
-        let aBody = buildAnthropicMessagesBody({ model: model.model, system: systemContent, history, stream: true });
+
+        let effectiveSystemContent = systemContent;
+        if (shouldUseCodeAgent && localWorkspaceHandle) {
+          const retrievalSnippets: string[] = [];
+          const listRes = await executeTool(
+            { id: "prefetch-list", name: "list_files", input: { prefix: "src/" } },
+            localWorkspaceHandle,
+          );
+          retrievalSnippets.push(
+            "### list_files src/\n```\n" + clipMiddle(listRes, 1400, "list files") + "\n```",
+          );
+
+          if (capability === "full-ide") {
+            const query = text.slice(0, 120);
+            const searchRes = await executeTool(
+              { id: "prefetch-search", name: "search_code", input: { query, prefix: "src/" } },
+              localWorkspaceHandle,
+            );
+            retrievalSnippets.push(
+              `### search_code: ${query}\n\`\`\`\n${clipMiddle(searchRes, 2200, "search results")}\n\`\`\``,
+            );
+
+            const pathMatches = Array.from(
+              new Set(
+                searchRes
+                  .split("\n")
+                  .map((line) => /^([^:\n]+):\d+:/.exec(line)?.[1])
+                  .filter((p): p is string => Boolean(p)),
+              ),
+            ).slice(0, 3);
+
+            for (const p of pathMatches) {
+              const readRes = await executeTool(
+                { id: `prefetch-read-${p}`, name: "read_file", input: { path: p } },
+                localWorkspaceHandle,
+              );
+              retrievalSnippets.push(
+                `### ${p}\n\`\`\`\n${clipMiddle(readRes, 2200, `${p} content`)}\n\`\`\``,
+              );
+            }
+          }
+
+          if (retrievalSnippets.length > 0) {
+            effectiveSystemContent = clipMiddle(
+              systemContent +
+                "\n\n## Retrieved workspace context (deterministic prefetch)\n" +
+                retrievalSnippets.join("\n\n"),
+              MAX_ANTHROPIC_SYSTEM_CHARS,
+              "system context",
+            );
+          }
+        }
+
+        let aBody = buildAnthropicMessagesBody({
+          model: model.model,
+          system: effectiveSystemContent,
+          history: historyForRequest,
+          stream: true,
+          maxTokens: shouldUseCodeAgent ? ANTHROPIC_BUILD_MAX_TOKENS : ANTHROPIC_CHAT_MAX_TOKENS,
+        });
+
         if (capturedImages.length > 0) {
           const msgs = aBody.messages as Array<{ role: string; content: unknown }>;
           const lastIdx = msgs.length - 1;
@@ -958,7 +1718,14 @@ export function ChatPanel() {
             const imageBlocks = capturedImages.map((url) => {
               const mimeMatch = url.match(/^data:([^;]+);base64,/);
               const mediaType = (mimeMatch?.[1] ?? "image/png") as string;
-              return { type: "image", source: { type: "base64", media_type: mediaType, data: url.replace(/^data:[^;]+;base64,/, "") } };
+              return {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: mediaType,
+                  data: url.replace(/^data:[^;]+;base64,/, ""),
+                },
+              };
             });
             const patched = [...msgs];
             patched[lastIdx] = { ...last, content: [...imageBlocks, { type: "text", text: last.content }] };
@@ -966,70 +1733,94 @@ export function ChatPanel() {
           }
         }
 
-        // 20 s to get the first HTTP response byte (shorter than 90 s, shows error faster)
-        const connDeadline = new AbortController();
-        const connTid = window.setTimeout(
-          () => connDeadline.abort(new DOMException("Anthropic first-byte timeout (20 s)", "AbortError")),
-          20_000,
-        );
-
-        let res: Response;
-        try {
-          res = await fetch(aUrl, {
-            method: "POST",
-            headers: aHeaders,
-            body: JSON.stringify(aBody),
-            signal: mergeAbortSignals(abort.signal, connDeadline.signal),
-          });
-        } finally {
-          window.clearTimeout(connTid);
+        const MAX_RETRIES = 2;
+        const RETRY_DELAYS = [2_000, 5_000];
+        let res: Response | null = null;
+        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+          if (abort.signal.aborted) return;
+          if (attempt > 0) {
+            const delay = RETRY_DELAYS[attempt - 1]!;
+            setStatus(`*Anthropic returned 529 — retrying in ${delay / 1000}s… (${attempt}/${MAX_RETRIES})*`);
+            await new Promise<void>((resolve, reject) => {
+              const tid = window.setTimeout(resolve, delay);
+              abort.signal.addEventListener("abort", () => { window.clearTimeout(tid); reject(); }, { once: true });
+            }).catch(() => undefined);
+            if (abort.signal.aborted) return;
+          }
+          const connDeadline = new AbortController();
+          const connTid = window.setTimeout(
+            () => connDeadline.abort(new DOMException("Anthropic first-byte timeout (20 s)", "AbortError")),
+            20_000,
+          );
+          try {
+            res = await fetch(aUrl, {
+              method: "POST",
+              headers: aHeaders,
+              body: JSON.stringify(aBody),
+              signal: mergeAbortSignals(abort.signal, connDeadline.signal),
+            });
+          } finally {
+            window.clearTimeout(connTid);
+          }
+          if (res.status !== 529) break;
+          if (attempt < MAX_RETRIES) await res.body?.cancel();
         }
 
-        const ct = res.headers.get("content-type") ?? "";
+        if (!res) return;
         if (!res.ok) {
           const errRaw = await res.text().catch(() => `HTTP ${res.status}`);
-          // Extract a readable message from Anthropic's JSON error body
           let errMsg = errRaw.slice(0, 500);
           try {
-            const j = JSON.parse(errRaw) as { error?: { message?: string; type?: string } };
+            const j = JSON.parse(errRaw) as { error?: { message?: string } };
             if (j.error?.message) errMsg = j.error.message;
-          } catch { /* keep raw text */ }
+          } catch { /* keep raw */ }
           const hint =
-            res.status === 401
-              ? "\n\n**Fix:** Check your Anthropic API key in Setup — it may be wrong or expired."
-              : res.status === 429
-                ? "\n\n**Rate limit hit.** Your Anthropic account is out of tokens for now.\n- Wait a minute and try again\n- Check usage at [console.anthropic.com](https://console.anthropic.com/)\n- Upgrade your plan or add credits if needed"
-                : res.status === 529
-                  ? "\n\nAnthropic is overloaded — try again in a moment."
-                  : res.status === 402
-                    ? "\n\n**Fix:** Add credits at [console.anthropic.com/billing](https://console.anthropic.com/billing)."
-                    : "\n\nCheck model name, billing, and [Anthropic status](https://status.anthropic.com).";
-          console.error("[chat] Anthropic error", res.status, errRaw);
+            res.status === 401 ? "\n\n**Fix:** Check your Anthropic API key."
+            : res.status === 429 ? "\n\n**Input rate limit hit.** Request context is still too large for current TPM."
+            : res.status === 529 ? "\n\nAnthropic is overloaded for this route. Retry shortly."
+            : res.status === 402 ? "\n\n**Fix:** Add credits at [console.anthropic.com/billing](https://console.anthropic.com/billing)."
+            : "\n\nCheck model name, billing, and [Anthropic status](https://status.anthropic.com).";
           setStatus(`**Anthropic error ${res.status}:** ${errMsg}${hint}`);
+          if (effectiveMode === "build") transitionBuildFlow("build_failed");
           return;
         }
 
+        const ct = res.headers.get("content-type") ?? "";
         if (ct.includes("text/event-stream")) {
           let acc = "";
-          // Use a zero-width space as placeholder so the "Connecting…" spinner disappears
-          // the instant the server responds, without showing any visible character.
           setStatus("\u200B");
-          await consumeAnthropicMessageStream(
-            res.body,
-            (chunk) => {
-              acc += chunk;
-              updateMessage(assistantId, { content: acc });
-            },
-            { signal: abort.signal, idleMs: 30_000 },
-          );
+          await consumeAnthropicMessageStream(res.body, (chunk) => {
+            acc += chunk;
+            updateMessage(assistantId, { content: stripToolTraceTags(acc) });
+          }, { signal: abort.signal, idleMs: 30_000 });
+          if (acc.trim()) {
+            const cleaned = stripToolTraceTags(acc);
+            if (effectiveMode === "build") {
+              transitionBuildFlow("build_verifying");
+              const artifacts = parseBuildArtifacts(cleaned);
+              if (artifacts.validForApply) {
+                await autoApplyCoreBuildArtifacts(assistantId, cleaned);
+                transitionBuildFlow("build_done");
+              } else transitionBuildFlow("build_failed");
+            }
+            updateMessage(assistantId, { content: cleaned });
+          }
           if (!acc.trim()) setStatus("(empty response — check model id and Anthropic status)");
           return;
         }
 
-        // Non-streaming JSON response
         const data = (await res.json()) as { content?: Array<{ type?: string; text?: string }> };
         const txt = data.content?.find((c) => c.type === "text")?.text?.trim() || "";
-        setStatus(txt || "(empty response)");
+        const cleaned = stripToolTraceTags(txt) || "(empty response)";
+        if (effectiveMode === "build") {
+          transitionBuildFlow("build_verifying");
+          const artifacts = parseBuildArtifacts(cleaned);
+          if (artifacts.validForApply) {
+            await autoApplyCoreBuildArtifacts(assistantId, cleaned);
+            transitionBuildFlow("build_done");
+          } else transitionBuildFlow("build_failed");
+        }
+        setStatus(cleaned);
         return;
       }
 
@@ -1043,7 +1834,7 @@ export function ChatPanel() {
       }
       if (isOpenRouterBaseUrl(model.baseUrl)) {
         headers["Referer"] = import.meta.env.VITE_OPENROUTER_REFERRER || window.location.origin || "http://localhost:5173";
-        headers["X-Title"] = import.meta.env.VITE_OPENROUTER_APP_TITLE || "Unknown Name Trader";
+        headers["X-Title"] = import.meta.env.VITE_OPENROUTER_APP_TITLE || "SolClaw";
       }
 
       // 20 s connection timeout — same as Anthropic path
@@ -1063,8 +1854,8 @@ export function ChatPanel() {
             stream: true,
             messages: [
               { role: "system", content: systemContent },
-              ...history.map((m, i) => {
-                if (i === history.length - 1 && m.role === "user" && capturedImages.length > 0) {
+              ...historyForRequest.map((m, i) => {
+                if (i === historyForRequest.length - 1 && m.role === "user" && capturedImages.length > 0) {
                   return {
                     role: m.role,
                     content: [
@@ -1099,17 +1890,42 @@ export function ChatPanel() {
                 ? `\n\n**Fix:** Add credits to your ${providerLabel} account.`
                 : "";
         setStatus(`**${providerLabel} error ${res.status}:** ${errMsg}${hint}`);
+        if (effectiveMode === "build") transitionBuildFlow("build_failed");
         return;
       }
       if (ct.includes("text/event-stream")) {
         let acc = "";
         setStatus("\u200B");
-        await consumeChatCompletionStream(res.body, (chunk) => { acc += chunk; updateMessage(assistantId, { content: acc }); });
+        await consumeChatCompletionStream(res.body, (chunk) => {
+          acc += chunk;
+          updateMessage(assistantId, { content: stripToolTraceTags(acc) });
+        });
+        if (acc.trim()) {
+          const cleaned = stripToolTraceTags(acc);
+          if (effectiveMode === "build") {
+            transitionBuildFlow("build_verifying");
+            const artifacts = parseBuildArtifacts(cleaned);
+            if (artifacts.validForApply) {
+              await autoApplyCoreBuildArtifacts(assistantId, cleaned);
+              transitionBuildFlow("build_done");
+            } else transitionBuildFlow("build_failed");
+          }
+          updateMessage(assistantId, { content: cleaned });
+        }
         if (!acc.trim()) setStatus("(empty response — check model name and API key)");
         return;
       }
       const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-      setStatus(data.choices?.[0]?.message?.content?.trim() || "(empty response)");
+      const cleaned = stripToolTraceTags(data.choices?.[0]?.message?.content?.trim() || "") || "(empty response)";
+      if (effectiveMode === "build") {
+        transitionBuildFlow("build_verifying");
+        const artifacts = parseBuildArtifacts(cleaned);
+        if (artifacts.validForApply) {
+          await autoApplyCoreBuildArtifacts(assistantId, cleaned);
+          transitionBuildFlow("build_done");
+        } else transitionBuildFlow("build_failed");
+      }
+      setStatus(cleaned);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error("[chat] send error", e);
@@ -1132,6 +1948,7 @@ export function ChatPanel() {
               : `- CORS: deployed builds call \`${providerHost}\` directly from the browser`),
           );
         }
+        if (effectiveMode === "build") transitionBuildFlow("build_failed");
         return;
       }
 
@@ -1155,10 +1972,12 @@ export function ChatPanel() {
             ? " (Hosted builds call providers directly — check API key and network.)"
             : ""),
       );
+      if (effectiveMode === "build") transitionBuildFlow("build_failed");
     } finally {
       abortRef.current = null;
       setPending(false);
       setComposerBusy(false);
+      if (effectiveMode !== "build") transitionBuildFlow("chat");
     }
   }
 
@@ -1170,12 +1989,54 @@ export function ChatPanel() {
     } catch { /* ignore */ }
   }
 
+  const CHAT_LOCK_MS = 3 * 60 * 1000; // re-lock every 3 minutes
+  const [chatUnlocked, setChatUnlocked] = useState(() => {
+    try {
+      const ts = Number(localStorage.getItem("unt_chat_unlocked_ts_v1") ?? "0");
+      return ts > 0 && Date.now() - ts < CHAT_LOCK_MS;
+    } catch { return false; }
+  });
+
+  // Auto-relock after 3 minutes
+  useEffect(() => {
+    if (!chatUnlocked) return;
+    const tid = window.setTimeout(() => setChatUnlocked(false), CHAT_LOCK_MS);
+    return () => window.clearTimeout(tid);
+  }, [chatUnlocked]);
+
+  function unlockChat() {
+    setChatUnlocked(true);
+    try { localStorage.setItem("unt_chat_unlocked_ts_v1", String(Date.now())); } catch { /* ignore */ }
+  }
+
   return (
     <div
       id="chat-panel"
-      className="flex h-full min-h-0 min-w-[300px] flex-col"
+      className="relative flex h-full min-h-0 min-w-[300px] flex-col"
       style={{ background: "var(--color-bg-editor)", borderLeft: "1px solid var(--color-border)" }}
     >
+      {!chatUnlocked && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-6 bg-black px-8 text-center">
+          <div className="space-y-3">
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-[rgba(255,255,255,0.3)]">
+              Work in progress
+            </p>
+            <h2 className="text-[22px] font-bold leading-snug text-white">
+              The Chat is still in Beta
+            </h2>
+            <p className="text-[13px] leading-relaxed text-[rgba(255,255,255,0.45)]">
+              Code changes generated here may break the app.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={unlockChat}
+            className="rounded-xl border border-[rgba(255,255,255,0.15)] bg-[rgba(255,255,255,0.07)] px-8 py-3 text-[13px] font-semibold text-white transition-all hover:bg-[rgba(255,255,255,0.12)] hover:border-[rgba(255,255,255,0.28)] active:scale-[0.97]"
+          >
+            Proceed
+          </button>
+        </div>
+      )}
       {/* ── Tab bar ─────────────────────────────────────────────────── */}
       <div
         className="flex shrink-0 items-center gap-0 overflow-x-auto border-b border-[var(--color-border-subtle)] px-1"
@@ -1252,6 +2113,47 @@ export function ChatPanel() {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          <span
+            className={
+              "mr-1 rounded-lg border px-2.5 py-1 text-[10px] font-semibold " +
+              (buildFlowState === "build_running" || buildFlowState === "build_verifying"
+                ? "border-amber-500/25 bg-amber-500/10 text-amber-300/85"
+                : buildFlowState === "build_done"
+                  ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300/85"
+                  : buildFlowState === "build_failed"
+                    ? "border-red-500/30 bg-red-500/10 text-red-300/85"
+                    : buildFlowState === "build_confirm_pending"
+                      ? "border-cyan-500/25 bg-cyan-500/10 text-cyan-300/85"
+                      : "border-[var(--color-border-subtle)] bg-[var(--color-fill)] text-[var(--color-fg-muted)]")
+            }
+            title="Build flow state machine"
+          >
+            {buildFlowState === "build_running" && "Build running"}
+            {buildFlowState === "build_verifying" && "Verifying"}
+            {buildFlowState === "build_done" && "Build done"}
+            {buildFlowState === "build_failed" && "Build failed"}
+            {buildFlowState === "build_confirm_pending" && "Awaiting build confirm"}
+            {buildFlowState === "chat" && "Chat"}
+          </span>
+          <div className="mr-1 rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-fill)] px-2.5 py-1 text-[10px] font-semibold text-[var(--color-fg-muted)]">
+            Chat
+          </div>
+          <span
+            title={
+              chatLive
+                ? "Live: local workspace and IDE agent are connected"
+                : "Not live: reconnect workspace or local IDE agent"
+            }
+            className={
+              "inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-semibold " +
+              (chatLive
+                ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300/85"
+                : "border-[var(--color-border-subtle)] bg-[var(--color-fill)] text-[var(--color-fg-dim)]")
+            }
+          >
+            <span className={"size-1.5 rounded-full " + (chatLive ? "bg-emerald-400" : "bg-[var(--color-fg-dim)]")} />
+            {chatLive ? "Live" : "Not live"}
+          </span>
           {activeSession?.modelOverride ? (
             <button
               type="button"
@@ -1260,6 +2162,17 @@ export function ChatPanel() {
               className="rounded-lg px-2 py-1.5 text-[10px] text-amber-400/70 hover:bg-[var(--color-fill)] hover:text-amber-400"
             >
               custom model ×
+            </button>
+          ) : null}
+          {localIdeAgentReady ? (
+            <button
+              type="button"
+              title="Rollback latest local IDE edit"
+              onClick={() => void rollbackLatestEdit()}
+              disabled={rollbackBusy}
+              className="rounded-lg px-2 py-1.5 text-[10px] text-[var(--color-fg-dim)] hover:bg-[var(--color-fill)] hover:text-[var(--color-fg-muted)] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {rollbackBusy ? "rolling..." : "rollback"}
             </button>
           ) : null}
           <button type="button" title="Clear conversation" onClick={clearChat} className="rounded-lg p-2 text-[var(--color-fg-dim)] hover:bg-[var(--color-fill)] hover:text-[var(--color-fg-muted)]">
@@ -1271,8 +2184,8 @@ export function ChatPanel() {
       {/* ── Feed ────────────────────────────────────────────────────── */}
       <div
         ref={feedScrollRef}
+        tabIndex={0}
         className="relative flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto overflow-x-hidden px-4 py-4"
-        style={{ overflowAnchor: "none" }}
       >
         <StandaloneAssistantIntro messages={leadingAssistants} copiedId={copiedId} onCopy={copyMessage} />
         {leadingAssistants.length === 0 && turns.length === 0 ? (
@@ -1280,7 +2193,8 @@ export function ChatPanel() {
             showMissingKeyBanner={showMissingKeyBanner}
             localWorkspaceConnected={localWorkspaceHandle !== null}
             githubWired={Boolean(githubWorkspace.owner && githubWorkspace.repo)}
-            onOpenSetup={openSetupForLlm}
+            model={model}
+            onSetModel={setModel}
             onSend={(text) => void send(text)}
           />
         ) : null}
@@ -1290,16 +2204,48 @@ export function ChatPanel() {
             turn={turn}
             isLatestTurn={idx === turns.length - 1}
             pending={pending}
+            buildFlowState={buildFlowState}
+            autoApplied={Boolean(turns[idx]?.assistant?.id && autoAppliedMessageIds.has(turns[idx]!.assistant!.id))}
             copiedId={copiedId}
             commitResults={commitResults}
             githubWorkspace={githubWorkspace}
-            localWorkspaceConnected={localWorkspaceHandle !== null}
             onCopy={copyMessage}
-            onDiff={(path, code) => void openDiff(path, code)}
             onApplyAll={(edits) => void handleApplyAll(edits, turns[idx]?.assistant?.id)}
             onAddAlgo={addUserAlgo}
             onApplyConfig={handleApplyConfig}
             onSend={(text) => void send(text)}
+            onEdit={(userMsgId, newText) => {
+              // Compute the prior synchronously from current messages before
+              // truncation flushes, so the API gets the correct history.
+              const idx = messages.findIndex((m) => m.id === userMsgId);
+              const priorBeforeEdit = idx >= 0 ? messages.slice(0, idx) : messages;
+              const removedMsgs = idx >= 0 ? messages.slice(idx) : [];
+              const removedIds = new Set(removedMsgs.map((m) => m.id));
+              const removedAssistantIds = removedMsgs.filter((m) => m.role === "assistant").map((m) => m.id);
+              void (async () => {
+                setApplyError(null);
+                await restoreBackupsForAssistantMessages(removedAssistantIds);
+                setCommitResults((prev) => {
+                  const next = new Map(prev);
+                  for (const id of removedIds) next.delete(id);
+                  return next;
+                });
+                setAppliedBackups((prev) => {
+                  const next = new Map(prev);
+                  for (const id of removedIds) next.delete(id);
+                  return next;
+                });
+                setAutoAppliedMessageIds((prev) => {
+                  const next = new Set(prev);
+                  for (const id of removedIds) next.delete(id);
+                  return next;
+                });
+                setDiffState(null);
+                setDiffOriginal(null);
+                truncateMessagesAfter(userMsgId);
+                await send(newText, priorBeforeEdit);
+              })();
+            }}
             onDismissCommit={(msgId) => setCommitResults((prev) => { const next = new Map(prev); next.delete(msgId); return next; })}
             onLoadMint={navigateChartToMint}
           />
@@ -1308,42 +2254,24 @@ export function ChatPanel() {
 
       {/* ── Composer ────────────────────────────────────────────────── */}
       <div className="shrink-0 px-3 pb-3 pt-2">
-        {/* ── Local workspace status + Push strip ─────────────── */}
+        {/* ── Local workspace status ────────────────────────────── */}
         {localWorkspaceHandle ? (
           <div className="mb-2 flex items-center gap-2 rounded-lg border border-[color-mix(in_srgb,#22d3ee_20%,transparent)] bg-[color-mix(in_srgb,#22d3ee_5%,transparent)] px-3 py-1.5 text-[11px]">
             <span className="size-1.5 shrink-0 rounded-full bg-cyan-400/80" />
             <span className="text-cyan-300/70">Local workspace connected — edits write to disk instantly</span>
-            {pendingLocalEdits.size > 0 ? (
-              <button
-                type="button"
-                disabled={pushingToGitHub}
-                onClick={() => void handlePushToGitHub()}
-                title="Commit all locally-written files to your GitHub repo"
-                className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-[color-mix(in_srgb,#22d3ee_30%,transparent)] px-2 py-0.5 text-[10.5px] font-medium text-cyan-300/80 transition-colors hover:border-[color-mix(in_srgb,#22d3ee_50%,transparent)] hover:text-cyan-200 disabled:opacity-50"
-              >
-                {pushingToGitHub ? (
-                  <Loader2 className="size-3 animate-spin" strokeWidth={2} />
-                ) : (
-                  <Rocket className="size-3" strokeWidth={1.5} />
-                )}
-                Push {pendingLocalEdits.size} file{pendingLocalEdits.size !== 1 ? "s" : ""} to GitHub
-              </button>
-            ) : null}
           </div>
         ) : null}
-        {pushError ? (
-          <div className="mb-2 flex items-center gap-2 rounded-lg border border-red-500/20 px-3 py-1.5 text-[11.5px] text-red-400/80">
-            {pushError}
-            <button type="button" onClick={() => setPushError(null)} className="ml-auto shrink-0 underline opacity-70 hover:opacity-100">dismiss</button>
-          </div>
-        ) : null}
-
         {/* Status banners */}
         {applyingPaths.length > 0 ? (
           <div className="mb-2 flex items-center gap-2 px-1 text-[11.5px] text-[var(--color-fg-dim)]">
             <Loader2 className="size-3.5 shrink-0 animate-spin" strokeWidth={2} />
             {localWorkspaceHandle ? "Writing" : "Applying"} {applyingPaths.join(", ")}…
           </div>
+      ) : buildFlowState === "build_running" || buildFlowState === "build_verifying" ? (
+        <div className="mb-2 flex items-center gap-2 px-1 text-[11.5px] text-[var(--color-fg-dim)]">
+          <Loader2 className="size-3.5 shrink-0 animate-spin" strokeWidth={2} />
+          {buildFlowState === "build_running" ? "Build running…" : "Verifying build artifacts…"}
+        </div>
         ) : applyError ? (
           <div className="mb-2 flex items-center gap-2 rounded-lg border border-red-500/20 px-3 py-1.5 text-[11.5px] text-red-400/80">
             {applyError}
@@ -1351,14 +2279,8 @@ export function ChatPanel() {
           </div>
         ) : null}
 
-        {showMissingKeyBanner ? (
-          <div className="mb-2 px-1 text-[12px] text-[var(--color-fg-dim)]">
-            <button type="button" className="font-medium text-[var(--color-fg-muted)] underline underline-offset-2 hover:text-[var(--color-fg)]" onClick={openSetupForLlm}>
-              Add an API key in Setup
-            </button>
-            {" "}to start chatting.
-          </div>
-        ) : null}
+        {/* Model footer — always visible; click to edit LLM settings */}
+        <ModelFooterBar model={model} onSetModel={setModel} showMissingKey={showMissingKeyBanner} />
 
         {/* Hidden file input for image attachment */}
         <input

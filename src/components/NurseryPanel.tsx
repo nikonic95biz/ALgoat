@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Tooltip } from "@/components/Tooltip";
 import * as nursery from "@/lib/nurseryEngine";
+import { ingestNurserySnapshot } from "@/lib/nurseryDiscoveryBridge";
 import type { BondedToken, NurserySnapshot, PreBondToken } from "@/lib/nurseryEngine";
 
 // ── Formatters ────────────────────────────────────────────────────────────────
@@ -242,7 +243,13 @@ export function NurseryPanel({ onOpenToken }: { onOpenToken?: (mint: string) => 
 
   useEffect(() => {
     nursery.start();
-    const id = setInterval(() => setSnap(nursery.getSnapshot()), 4_000);
+    const refresh = () => {
+      const next = nursery.getSnapshot();
+      setSnap(next);
+      void ingestNurserySnapshot(next);
+    };
+    refresh();
+    const id = setInterval(refresh, 4_000);
     return () => clearInterval(id);
   }, []);
 

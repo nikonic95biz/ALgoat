@@ -370,6 +370,12 @@
   }
 
   /* Markdown prose rendered inside chat bubbles */
+  .unt-chat-user-bubble {
+    background: color-mix(in srgb, var(--color-fill) 78%, transparent);
+    border: 1px solid var(--color-border-subtle);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+  }
+
   .chat-prose {
     font-size: 13px;
     line-height: 1.65;
@@ -455,6 +461,11 @@
     min-width: 100%;
     font-size: 11.5px;
     line-height: 1.55;
+  }
+
+  .chat-prose.chat-prose-assistant .unt-chat-fence {
+    border-color: color-mix(in srgb, var(--color-border-subtle) 90%, #38bdf8 10%);
+    background: color-mix(in srgb, #0e0e0e 92%, #111827 8%);
   }
 
   .chat-prose blockquote {

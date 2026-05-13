@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Loader2 } from "lucide-react";
+import { ArrowLeft, Check, Loader2 } from "lucide-react";
 import { usePumpPortalConfigRevision } from "@/hooks/usePumpPortalConfigRevision";
 import { useApp } from "@/context/AppContext";
 import { getStoredSolanaRpcUrl, setStoredSolanaRpcUrl, getSolanaRpcUrl } from "@/lib/solanaRpc";
@@ -46,7 +46,17 @@ function setupSectionCardClass(ok: boolean): string {
 
 export function SetupPanel() {
   const rev = usePumpPortalConfigRevision();
-  const { model, setModel, githubWorkspace, setGithubWorkspace, localWorkspaceHandle, connectLocalWorkspace, disconnectLocalWorkspace } = useApp();
+  const {
+    model,
+    setModel,
+    githubWorkspace,
+    setGithubWorkspace,
+    localWorkspaceHandle,
+    connectLocalWorkspace,
+    disconnectLocalWorkspace,
+    setSidebarMode,
+    setActivitySection,
+  } = useApp();
 
   const [draftPumpKey, setDraftPumpKey] = useState(getStoredPumpPortalApiKey);
   const [draftTradingWalletSecret, setDraftTradingWalletSecret] = useState(getStoredPumpPortalTradingWalletSecret);
@@ -288,12 +298,30 @@ export function SetupPanel() {
     savedTimerRef.current = setTimeout(() => setSaved(false), 2200);
   }
 
+  function handleBack() {
+    setSidebarMode("analytics");
+    setActivitySection("analytics");
+  }
+
   return (
     <div
       className="flex h-full flex-col overflow-hidden"
       style={{ background: "var(--color-bg-sideBar)" }}
     >
       <div className="min-h-0 flex-1 unt-panel-inner overflow-y-auto">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={handleBack}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-[var(--color-fg-muted)] transition-colors hover:border-white/15 hover:text-[var(--color-fg)]"
+          >
+            <ArrowLeft className="size-3" strokeWidth={2} />
+            Back
+          </button>
+          <span className="text-[10px] font-medium uppercase tracking-[0.16em] text-[var(--color-fg-dim)]">
+            Setup
+          </span>
+        </div>
         <p className="unt-callout">
           <span className="font-semibold text-[var(--color-fg-heading)]">Privacy:</span> API keys and tokens stay in{" "}
           <span className="text-[var(--color-fg-heading)]">this browser only</span> (localStorage). They load again after refresh.

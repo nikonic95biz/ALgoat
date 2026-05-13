@@ -1,10 +1,17 @@
 import type { ChartAnalyticsState, TradingMode, UserBounceZone, ScalperUserConfig } from "@/context/AppContext";
 import type { ScalperPaperSnapshot } from "@/lib/scalperPaperEngine";
-import type { UserAlgoPreset } from "@/types";
+import type { AlgoBlueprint, TradingSessionRecord, UserAlgoPreset } from "@/types";
 import { formatUsdCompact } from "@/lib/formatUsd";
 
 const MAX_FILE_CONTENT_CHARS = 6_000;
 const MAX_FILE_TREE_PATHS = 120;
+
+export type LiveContextOptions = {
+  includeTradingDetails?: boolean;
+  includeSessionDetails?: boolean;
+  includeWorkspaceDetails?: boolean;
+  includeOpenFile?: boolean;
+};
 
 export type LiveContextSnapshot = {
   chartAnalytics: ChartAnalyticsState;
@@ -16,6 +23,11 @@ export type LiveContextSnapshot = {
   workspaceFilePaths: string[];
   bounceZones?: UserBounceZone[];
   scalperUserConfig?: ScalperUserConfig;
+  algoSessionActive?: boolean;
+  tradingHalted?: boolean;
+  scalperLiveBuySol?: number;
+  tradingSessions?: TradingSessionRecord[];
+  algoBlueprints?: AlgoBlueprint[];
 };
 
 function scalperStatus(s: ScalperPaperSnapshot | null): string {
@@ -29,16 +41,44 @@ function algoName(algos: UserAlgoPreset[], id: string | null): string {
   return algos.find((a) => a.id === id)?.name ?? id;
 }
 
-export function buildLiveContext(snap: LiveContextSnapshot): string {
+export function buildLiveContext(snap: LiveContextSnapshot, options: LiveContextOptions = {}): string {
+  const {
+    includeTradingDetails = true,
+    includeSessionDetails = true,
+    includeWorkspaceDetails = true,
+    includeOpenFile = true,
+  } = options;
   const lines: string[] = ["## Live app state"];
   const ca = snap.chartAnalytics;
 
   lines.push(`- Chart mint (loaded or pending stream): ${ca.mint ?? "none"}`);
   lines.push(`- Selected algo: ${algoName(snap.userAlgos, snap.selectedAlgoId)}`);
   lines.push(`- Trading mode: ${snap.tradingMode}`);
+  if (snap.algoSessionActive !== undefined) {
+    lines.push(`- Algo session: ${snap.algoSessionActive ? "ACTIVE" : "stopped"}${snap.tradingHalted ? " · ⚠️ HALTED (kill switch triggered)" : ""}`);
+  }
+  if (snap.tradingMode === "real" && snap.scalperLiveBuySol !== undefined && snap.scalperLiveBuySol > 0) {
+    lines.push(`- Live buy size: ${snap.scalperLiveBuySol} SOL`);
+  }
   lines.push(`- Paper scalper: ${scalperStatus(ca.paperScalper)}`);
+  lines.push("");
+  lines.push("## SolClaw app map");
+  lines.push("- Trading tab: select an algo preset and run named paper/real trading sessions.");
+  lines.push("- Algo Lab tab: create, view, delete, edit, and train algo blueprints/presets. Put strategy-specific UI here.");
+  lines.push("- Performance tab: inspect saved trading-session files by preset/session and use results to improve algos.");
 
-  if (snap.bounceZones && ca.mint) {
+  if (snap.algoBlueprints && snap.algoBlueprints.length > 0) {
+    lines.push("");
+    lines.push("## Algo Lab blueprints");
+    for (const b of snap.algoBlueprints.slice(0, 8)) {
+      lines.push(`- ${b.name} (${b.status}) · goal: ${b.goal}`);
+      lines.push(`  market: ${b.universe.length ? b.universe.join(", ") : "not set"} · signals: ${b.signals.length ? b.signals.join(", ") : "not set"}`);
+      lines.push(`  entry: ${b.entryRules.length ? b.entryRules.join("; ") : "not set"} · exit: ${b.exitRules.length ? b.exitRules.join("; ") : "not set"}`);
+      lines.push(`  implementation: preset ${b.implementation.presetId ?? "none"} · runnable ${b.implementation.runnable ? "yes" : "no"}`);
+    }
+  }
+
+  if (includeTradingDetails && snap.bounceZones && ca.mint) {
     const mintZones = snap.bounceZones.filter((z) => z.mint === ca.mint);
     if (mintZones.length > 0) {
       const active = mintZones.filter((z) => z.enabled);
@@ -55,15 +95,15 @@ export function buildLiveContext(snap: LiveContextSnapshot): string {
   if (snap.scalperUserConfig) {
     const c = snap.scalperUserConfig;
     lines.push(
-      `- Scalper knobs: dip ${c.dipMinPct}% · smallest buy that counts ${c.catalystMinSol} SOL · sell for profit at +${c.takeProfitPct}% · emergency sell if others sell ${c.minOrderBookSellSolForStop} SOL or more`,
+      `- Built-in scalper knobs (reference only; do not force these onto unrelated strategies): dip ${c.dipMinPct}% · catalyst ${c.catalystMinSol} SOL · TP +${c.takeProfitPct}% · stop sell ${c.minOrderBookSellSolForStop} SOL`,
     );
     if (snap.tradingMode === "real") {
       lines.push(
-        `- Real-money trade settings: slippage ${c.realSlippagePct}% · priority fee ${c.realPriorityFeeSol} SOL`,
+        `- Built-in scalper live settings (reference only): slippage ${c.realSlippagePct}% · priority fee ${c.realPriorityFeeSol} SOL`,
       );
     }
   }
-  if (snap.tradingMode === "real") {
+  if (includeTradingDetails && snap.tradingMode === "real") {
     if (ca.livePumpPortalLastSig) {
       lines.push(`- Last Lightning tx (PumpPortal): ${ca.livePumpPortalLastSig}`);
     }
@@ -79,54 +119,80 @@ export function buildLiveContext(snap: LiveContextSnapshot): string {
     }
   }
 
-  lines.push("");
-  lines.push("## Chart & PumpPortal tape (snapshot at send time)");
-  lines.push(
-    `- Chart fetch: ${ca.chartLoading ? "loading…" : "idle"}${ca.chartError ? ` · error: ${ca.chartError}` : ""}`,
-  );
-  lines.push(`- Candle interval: ${ca.chartInterval ?? "n/a"}`);
-  lines.push(`- Y-axis mode: ${ca.yMcCap === null ? "n/a" : ca.yMcCap ? "market cap USD" : "price USD"}`);
-  if (ca.tokenSupplyUi != null) {
-    lines.push(`- Token supply (RPC, UI units): ${ca.tokenSupplyUi}`);
-  }
-
-  if (ca.lastCandle) {
-    const c = ca.lastCandle;
-    const unit = c.yAxisIsMarketCapUsd ? "MC USD" : "price USD";
-    lines.push(
-      `- Last candle (${c.interval}, ${unit}): O ${formatUsdCompact(c.open)} · H ${formatUsdCompact(c.high)} · L ${formatUsdCompact(c.low)} · C ${formatUsdCompact(c.close)} · bar ${new Date(c.timeUnix * 1000).toISOString()}`,
-    );
-  } else {
-    lines.push("- Last candle: (none — chart still loading or no candles yet)");
-  }
-
-  lines.push(
-    `- PumpPortal trade stream: ${ca.orderBookConn}${ca.orderBookError ? ` · ${ca.orderBookError}` : ""}`,
-  );
-
-  if (ca.tapeSummary) {
-    const t = ca.tapeSummary;
-    lines.push(
-      `- Tape buffer (${t.sampleSize} prints): buys ${t.buyCount} · sells ${t.sellCount} · Σ SOL ${t.solVolume.toFixed(4)}`,
-    );
-    lines.push(
-      `- Latest MC USD from tape: ${t.latestMcUsd != null ? formatUsdCompact(t.latestMcUsd) : "not reported on recent prints"}`,
-    );
-    if (t.recentPrints.length > 0) {
-      lines.push("- Recent prints (newest first):");
-      for (const p of t.recentPrints) {
-        lines.push(
-          `  - ${new Date(p.ts).toISOString()} · ${p.buy ? "buy" : "sell"} · ${p.sol.toFixed(4)} SOL · MC ${p.mcUsd != null ? formatUsdCompact(p.mcUsd) : "—"}`,
+  if (includeSessionDetails && snap.tradingSessions && snap.tradingSessions.length > 0) {
+    lines.push("");
+    lines.push("## Saved trading sessions");
+    for (const s of snap.tradingSessions.slice(0, 5)) {
+      const trades = s.trades.length;
+      const wins = s.trades.filter((t) => (t.pnlPct ?? t.netSol ?? 0) > 0).length;
+      const pnl = s.trades.filter((t) => t.pnlPct != null).reduce((sum, t) => sum + (t.pnlPct ?? 0), 0);
+      const netSol = s.trades.filter((t) => t.netSol != null).reduce((sum, t) => sum + (t.netSol ?? 0), 0);
+      lines.push(
+        `- ${s.name} (${s.mode}, ${s.status}) · preset ${s.presetName} · mint ${s.mint ?? "none"} · trades ${trades} · wins ${wins}` +
+        (trades ? ` · pnl Σ ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}% · net SOL ${netSol >= 0 ? "+" : ""}${netSol.toFixed(4)}` : ""),
+      );
+      lines.push(
+        `  config snapshot (preset-specific): ${JSON.stringify(s.configSnapshot).slice(0, 380)}${JSON.stringify(s.configSnapshot).length > 380 ? "…" : ""}`,
+      );
+      if (s.trades.length > 0) {
+        const recentTrades = s.trades.slice(-5).map((t) =>
+          `${new Date(t.closedAtTs).toISOString()} ${t.kind} ${t.exitReason} pnl ${t.pnlPct == null ? "n/a" : `${t.pnlPct.toFixed(2)}%`} netSOL ${t.netSol == null ? "n/a" : t.netSol.toFixed(4)}`,
         );
+        lines.push(`  recent trades: ${recentTrades.join(" | ")}`);
       }
     }
-  } else {
-    lines.push("- Tape snapshot: n/a");
+  }
+
+  if (includeTradingDetails) {
+    lines.push("");
+    lines.push("## Chart & PumpPortal tape (snapshot at send time)");
+    lines.push(
+      `- Chart fetch: ${ca.chartLoading ? "loading…" : "idle"}${ca.chartError ? ` · error: ${ca.chartError}` : ""}`,
+    );
+    lines.push(`- Candle interval: ${ca.chartInterval ?? "n/a"}`);
+    lines.push(`- Y-axis mode: ${ca.yMcCap === null ? "n/a" : ca.yMcCap ? "market cap USD" : "price USD"}`);
+    if (ca.tokenSupplyUi != null) {
+      lines.push(`- Token supply (RPC, UI units): ${ca.tokenSupplyUi}`);
+    }
+
+    if (ca.lastCandle) {
+      const c = ca.lastCandle;
+      const unit = c.yAxisIsMarketCapUsd ? "MC USD" : "price USD";
+      lines.push(
+        `- Last candle (${c.interval}, ${unit}): O ${formatUsdCompact(c.open)} · H ${formatUsdCompact(c.high)} · L ${formatUsdCompact(c.low)} · C ${formatUsdCompact(c.close)} · bar ${new Date(c.timeUnix * 1000).toISOString()}`,
+      );
+    } else {
+      lines.push("- Last candle: (none — chart still loading or no candles yet)");
+    }
+
+    lines.push(
+      `- PumpPortal trade stream: ${ca.orderBookConn}${ca.orderBookError ? ` · ${ca.orderBookError}` : ""}`,
+    );
+
+    if (ca.tapeSummary) {
+      const t = ca.tapeSummary;
+      lines.push(
+        `- Tape buffer (${t.sampleSize} prints): buys ${t.buyCount} · sells ${t.sellCount} · Σ SOL ${t.solVolume.toFixed(4)}`,
+      );
+      lines.push(
+        `- Latest MC USD from tape: ${t.latestMcUsd != null ? formatUsdCompact(t.latestMcUsd) : "not reported on recent prints"}`,
+      );
+      if (t.recentPrints.length > 0) {
+        lines.push("- Recent prints (newest first):");
+        for (const p of t.recentPrints) {
+          lines.push(
+            `  - ${new Date(p.ts).toISOString()} · ${p.buy ? "buy" : "sell"} · ${p.sol.toFixed(4)} SOL · MC ${p.mcUsd != null ? formatUsdCompact(p.mcUsd) : "—"}`,
+          );
+        }
+      }
+    } else {
+      lines.push("- Tape snapshot: n/a");
+    }
   }
 
   lines.push("");
 
-  if (snap.openFilePath && snap.openFileContent != null) {
+  if (includeOpenFile && snap.openFilePath && snap.openFileContent != null) {
     const content =
       snap.openFileContent.length > MAX_FILE_CONTENT_CHARS
         ? snap.openFileContent.slice(0, MAX_FILE_CONTENT_CHARS) + "\n… (truncated)"
@@ -143,7 +209,7 @@ export function buildLiveContext(snap: LiveContextSnapshot): string {
     lines.push("None open.");
   }
 
-  if (snap.workspaceFilePaths.length > 0) {
+  if (includeWorkspaceDetails && snap.workspaceFilePaths.length > 0) {
     lines.push("");
     lines.push(`## File tree (${Math.min(snap.workspaceFilePaths.length, MAX_FILE_TREE_PATHS)} of ${snap.workspaceFilePaths.length} paths)`);
     lines.push(snap.workspaceFilePaths.slice(0, MAX_FILE_TREE_PATHS).join("\n"));

@@ -67,13 +67,14 @@ export const LLM_BACKENDS: LlmBackendDefinition[] = [
     label: "Anthropic (Claude)",
     providerLabel: "Anthropic",
     baseUrl: "https://api.anthropic.com/v1",
-    defaultModel: "claude-sonnet-4-20250514",
+    defaultModel: "claude-sonnet-4-6",
     fetchModelsList: false,
     staticModels: [
-      "claude-opus-4-20250514",
-      "claude-sonnet-4-20250514",
-      "claude-3-7-sonnet-20250219",
-      "claude-3-5-haiku-20241022",
+      "claude-opus-4-7",
+      "claude-opus-4-6",
+      "claude-sonnet-4-6",
+      "claude-sonnet-4-5-20250929",
+      "claude-haiku-4-5-20251001",
     ],
   },
   {
@@ -156,9 +157,9 @@ export const LLM_BACKENDS: LlmBackendDefinition[] = [
     label: "Ollama (local)",
     providerLabel: "Ollama",
     baseUrl: "http://127.0.0.1:11434/v1",
-    defaultModel: "llama3.2",
+    defaultModel: "qwen2.5-coder:7b",
     fetchModelsList: true,
-    staticModels: ["llama3.2", "llama3.1", "mistral", "qwen2.5"],
+    staticModels: ["qwen2.5-coder:7b", "qwen2.5-coder:14b", "llama3.2", "llama3.1", "mistral", "qwen2.5", "deepseek-coder-v2"],
   },
 ];
 

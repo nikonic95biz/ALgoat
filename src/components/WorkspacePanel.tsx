@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Editor from "@monaco-editor/react";
 import { ChevronRight, FileCode2, Folder, GitBranch, Loader2, RefreshCw } from "lucide-react";
 import { useApp } from "@/context/AppContext";
-import { githubGetFileContent, githubListTextPaths, githubPutFileContent } from "@/lib/githubApi";
+import { githubGetFileContent, githubListTextPaths, githubPutFileContent, githubForkUpstreamIntoViewerAccount } from "@/lib/githubApi";
+import { getDefaultGithubUpstream } from "@/lib/githubUpstreamDefaults";
 
 type TreeNode = {
   name: string;
@@ -138,16 +139,35 @@ function TreeRow({
 export function WorkspacePanel() {
   const {
     githubWorkspace,
+    setGithubWorkspace,
     setOpenFile,
     setWorkspaceFilePaths,
     applyEditTick,
     lastAppliedPath,
-    setActivitySection,
-    setSidebarMode,
-    setSidebarOpen,
   } = useApp();
   const { token, owner, repo, branch } = githubWorkspace;
   const githubReady = Boolean(token.trim() && owner.trim() && repo.trim());
+  const upstreamForkTarget = useMemo(() => getDefaultGithubUpstream(), []);
+  const [forkBusy, setForkBusy] = useState(false);
+  const [forkErr, setForkErr] = useState<string | null>(null);
+
+  async function handleForkConnect() {
+    if (!token.trim()) { setForkErr("Paste a GitHub PAT first."); return; }
+    setForkErr(null);
+    setForkBusy(true);
+    try {
+      const next = await githubForkUpstreamIntoViewerAccount({
+        token: token.trim(),
+        upstreamOwner: upstreamForkTarget.owner,
+        upstreamRepo: upstreamForkTarget.repo,
+      });
+      setGithubWorkspace({ owner: next.owner, repo: next.repo, branch: next.branch ?? "main" });
+    } catch (e) {
+      setForkErr(e instanceof Error ? e.message : "Fork failed");
+    } finally {
+      setForkBusy(false);
+    }
+  }
   const br = branch.trim() || "main";
 
   const [paths, setPaths] = useState<string[]>([]);
@@ -282,33 +302,74 @@ export function WorkspacePanel() {
 
   const repoLabel = githubReady ? `${owner}/${repo}` : null;
 
-  /** Not connected — show setup prompt */
+  /** Not connected — inline GitHub setup */
   if (!githubReady) {
     return (
       <div
-        className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center"
+        className="flex h-full flex-col gap-5 overflow-y-auto px-4 py-5"
         style={{ background: "var(--color-bg-sideBar)" }}
       >
-        <GitBranch className="size-8 text-[var(--color-fg-dim)]" strokeWidth={1.5} />
-        <div className="max-w-sm">
-          <p className="unt-section-title text-[14px]">Connect GitHub</p>
-          <p className="unt-body-text mt-2">
-            Add a GitHub PAT in Setup and click{" "}
-            <span className="font-medium text-[var(--color-fg)]">Fork &amp; connect</span> to
-            browse and edit your repo files from here.
-          </p>
+        <div className="flex items-center gap-2.5">
+          <GitBranch className="size-5 text-[var(--color-fg-dim)]" strokeWidth={1.5} />
+          <div>
+            <p className="text-[13px] font-semibold text-[var(--color-fg)]">Connect GitHub</p>
+            <p className="text-[11px] text-[var(--color-fg-dim)]">Browse and edit your repo files from here</p>
+          </div>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            setActivitySection("models");
-            setSidebarMode("models");
-            setSidebarOpen(true);
-          }}
-          className="unt-btn-primary px-5 py-2 text-[13px]"
-        >
-          Open Setup
-        </button>
+
+        <div className="space-y-3 rounded-xl border border-cyan-400/18 bg-[rgba(34,211,238,0.03)] p-4">
+          <div className="space-y-1">
+            <label className="block text-[10px] font-semibold uppercase tracking-[0.1em] text-[var(--color-fg-dim)]">GitHub PAT</label>
+            <input
+              type="password"
+              value={token}
+              onChange={(e) => setGithubWorkspace({ token: e.target.value })}
+              placeholder="ghp_… or fine-grained token"
+              className="w-full rounded-lg border border-cyan-400/18 bg-[rgba(34,211,238,0.04)] px-3 py-2 font-mono text-[11px] text-cyan-100/80 outline-none placeholder:text-[var(--color-fg-dim)] focus:border-cyan-400/35 transition-colors"
+            />
+            <p className="text-[10px] text-[var(--color-fg-dim)]">Classic token with <code className="font-mono">repo</code> scope, or fine-grained with fork + Contents write.</p>
+          </div>
+
+          <button
+            type="button"
+            disabled={!token.trim() || forkBusy}
+            onClick={() => void handleForkConnect()}
+            className="w-full rounded-xl border border-cyan-400/28 bg-cyan-500/12 py-2.5 text-[12px] font-semibold text-cyan-200 transition-all hover:bg-cyan-500/20 disabled:opacity-35"
+          >
+            {forkBusy ? (
+              <span className="flex items-center justify-center gap-2"><Loader2 className="size-3.5 animate-spin" />Forking…</span>
+            ) : (
+              `Fork ${upstreamForkTarget.owner}/${upstreamForkTarget.repo} & connect`
+            )}
+          </button>
+
+          {forkErr && <p className="text-[11px] text-red-400/80">{forkErr}</p>}
+
+          {/* Manual fields fallback */}
+          <details className="group">
+            <summary className="cursor-pointer list-none text-[11px] text-[var(--color-fg-dim)] hover:text-[var(--color-fg)]">
+              Or enter owner / repo manually ▸
+            </summary>
+            <div className="mt-2 space-y-1.5">
+              {[
+                { label: "Owner", key: "owner" as const, ph: "your-github-username" },
+                { label: "Repo", key: "repo" as const, ph: "solclaw" },
+                { label: "Branch", key: "branch" as const, ph: "main" },
+              ].map(({ label, key, ph }) => (
+                <div key={key} className="space-y-0.5">
+                  <label className="block text-[10px] text-[var(--color-fg-dim)]">{label}</label>
+                  <input
+                    type="text"
+                    value={githubWorkspace[key]}
+                    onChange={(e) => setGithubWorkspace({ [key]: e.target.value })}
+                    placeholder={ph}
+                    className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-fill)] px-2.5 py-1.5 font-mono text-[11px] text-[var(--color-fg)] outline-none"
+                  />
+                </div>
+              ))}
+            </div>
+          </details>
+        </div>
       </div>
     );
   }

@@ -1,5 +1,5 @@
 import { ChevronDown } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 export type InlinePickerItem = { value: string; label: string };
 
@@ -14,6 +14,7 @@ type Props = {
   /** When set, shown instead of resolving `value` from items/groups (e.g. hidden engine ID). */
   displayValue?: string;
   placeholder?: string;
+  renderItemAction?: (item: InlinePickerItem, close: () => void) => ReactNode;
   "aria-label"?: string;
 };
 
@@ -44,6 +45,7 @@ export function InlineToolbarPicker({
   groups,
   displayValue,
   placeholder = "Choose…",
+  renderItemAction,
   "aria-label": ariaLabel,
 }: Props) {
   const [open, setOpen] = useState(false);
@@ -100,14 +102,15 @@ export function InlineToolbarPicker({
                   role="option"
                   aria-selected={value === opt.value}
                   data-active={value === opt.value ? "true" : "false"}
-                  className="unt-inline-picker-option"
+                  className="unt-inline-picker-option flex items-center gap-2"
                   onClick={() => {
                     onChange(opt.value);
                     setOpen(false);
                   }}
                   title={opt.label}
                 >
-                  {opt.label}
+                  <span className="min-w-0 flex-1 truncate text-left">{opt.label}</span>
+                  {renderItemAction ? renderItemAction(opt, () => setOpen(false)) : null}
                 </button>
               ))
             : null}
@@ -122,14 +125,15 @@ export function InlineToolbarPicker({
                       role="option"
                       aria-selected={value === opt.value}
                       data-active={value === opt.value ? "true" : "false"}
-                      className="unt-inline-picker-option"
+                      className="unt-inline-picker-option flex items-center gap-2"
                       onClick={() => {
                         onChange(opt.value);
                         setOpen(false);
                       }}
                       title={opt.label}
                     >
-                      {opt.label}
+                      <span className="min-w-0 flex-1 truncate text-left">{opt.label}</span>
+                      {renderItemAction ? renderItemAction(opt, () => setOpen(false)) : null}
                     </button>
                   ))}
                 </div>
