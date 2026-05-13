@@ -32,7 +32,7 @@ Current state: one concrete strategy (order-book scalper), live Pump.fun data, p
 
 ## Privacy
 
-SolClaw is fully open source — [read the code](https://github.com/Enrichfun/solclaw). All keys and secrets are stored only in your browser's `localStorage`. Nothing is sent to any SolClaw-owned server. Your keys go directly to the provider you configured (Anthropic, PumpPortal, Solana RPC, etc.) — straight from your browser.
+SolClaw is fully open source — read the code in this repository. All keys and secrets are stored only in your browser's `localStorage`. Nothing is sent to any SolClaw-owned server. Your keys go directly to the provider you configured (Anthropic, PumpPortal, Solana RPC, etc.) — straight from your browser.
 
 ---
 
@@ -71,7 +71,7 @@ State lives in `localStorage` + IndexedDB. No accounts, no sync, no tracking.
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/Enrichfun/solclaw
+git clone <your-fork-or-clone-url>
 cd solclaw
 npm install
 ```

@@ -64,7 +64,7 @@ Three refined classifiers for incoming messages:
 
 ### Branding
 
-- Removed all `enrich.fun` / `Enrichfun` references across: `index.html`, `public/index.html`, `vercel.json`, `README.md`, `CHANGELOG.md`, `src/components/LandingPage.tsx`, `src/components/ReleaseNotesPage.tsx`, `src/lib/githubUpstreamDefaults.ts`.
+- Removed legacy branding references across docs, metadata, and site surfaces.
 - All links and repo references updated to `solclaw.app` / `github.com/solclaw/solclaw`.
 
 ### Bug Fixes
