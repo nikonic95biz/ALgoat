@@ -148,13 +148,13 @@ Each token flows into `DiscoveryBus` (IndexedDB-backed) with tier scoring. Click
 npm run build
 ```
 
-Output: `dist/`. Deploy to any static host.
+Output: `dist/`. Deploy to any static host (Netlify, Vercel, GitHub Pages, Cloudflare Pages, etc.).
 
-**Vercel** (recommended):
-1. Import this repo in [vercel.com/new](https://vercel.com/new)
-2. Build command: `npm run build`
-3. Output directory: `dist`
-4. Set environment variables in `vercel.json` or Vercel dashboard if needed
+- Build command: `npm run build`
+- Output directory: `dist`
+- No server required — fully static
+
+If your host supports rewrite rules, proxy `/pump-api/*` → `https://swap-api.pump.fun/*` and `/pump-frontend/*` → `https://frontend-api.pump.fun/*` to avoid CORS issues in production. See `vercel.json` for a working example.
 
 ---
 

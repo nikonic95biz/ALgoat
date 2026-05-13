@@ -1,6 +1,6 @@
 # AGENTS.md — Contributor & IDE-agent guide
 
-This file is for **humans** and **AI coding agents** (Cursor, Copilot, Claude Code, etc.) working on Unknown Name Trader.
+This file is for **humans** and **AI coding agents** (Cursor, Copilot, Claude Code, etc.) working on SolClaw.
 
 ---
 
