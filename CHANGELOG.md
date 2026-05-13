@@ -65,7 +65,7 @@ Three refined classifiers for incoming messages:
 ### Branding
 
 - Removed legacy branding references across docs, metadata, and site surfaces.
-- All links and repo references updated to `solclaw.app` / `github.com/solclaw/solclaw`.
+- All links and repo references updated to the current GitHub repository references.
 
 ### Bug Fixes
 
@@ -80,7 +80,7 @@ Three refined classifiers for incoming messages:
 
 ## v1.1 — 2026-05-04
 
-**Public route:** engineering changelog is browseable at **`{BASE_PATH}/changelog`** (production example: [solclaw.app/changelog](https://solclaw.app/changelog)). Implementation: `ReleaseNotesPage.tsx`, routing in `App.tsx`, `changelogPath()` in `siteUrls.ts`.
+**Public route:** engineering changelog is browseable at **`{BASE_PATH}/changelog`**. Implementation: `ReleaseNotesPage.tsx`, routing in `App.tsx`, `changelogPath()` in `siteUrls.ts`.
 
 ### Bounce Zone Engine
 
