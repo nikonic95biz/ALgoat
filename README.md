@@ -70,17 +70,17 @@ Vite starts on port 5173 by default. The `predev` script runs `scripts/bundle-wo
 
 ### 3. Configure (in-app)
 
-Open the **Setup** panel (gear icon, top right) and fill in what you need:
+Open the **Setup** panel (gear icon, top right):
 
-| Setting | Required for | Notes |
+| Setting | Status | Notes |
 |---|---|---|
-| **LLM API key** | AI chat + code edits | Paste any key — provider is detected automatically |
-| **PumpPortal API key** | Real trading, live order book | Get one at [pumpportal.fun](https://pumpportal.fun) |
-| **Trading wallet** | Real trade execution | Solana private key, stored in browser only |
-| **GitHub PAT + repo** | Pushing AI code edits to your fork | Personal access token with repo scope |
-| **Local workspace** | Instant disk writes via HMR | Point to the cloned repo folder |
+| **LLM API key** | Optional | Enables AI chat and code edits. Paste any key — provider is detected automatically. Supported: Anthropic, OpenAI, Groq, xAI, Mistral, DeepSeek, Gemini, OpenRouter, Ollama |
+| **PumpPortal API key** | Optional | Enables live order book and real trade execution. Get one at [pumpportal.fun](https://pumpportal.fun). Without it, the app still works in read-only / paper mode |
+| **Trading wallet** | Optional | Solana private key for real-money execution. Only needed if you want live trades |
+| **GitHub PAT + repo** | Optional | Only needed if you want the AI to push code edits to a GitHub fork |
+| **Local workspace** | Optional | Connect your cloned repo folder so AI edits write directly to disk (instant Vite HMR) |
 
-All settings are stored in `localStorage` — nothing is sent anywhere except the respective provider when you use it.
+> **Privacy:** SolClaw is fully open source — [audit the code yourself](https://github.com/Enrichfun/solclaw). All keys and secrets are stored only in your browser's `localStorage`. Nothing is sent to any SolClaw-owned server. Your keys go only to the provider you configured (Anthropic, PumpPortal, etc.), directly from your browser.
 
 ---
 
