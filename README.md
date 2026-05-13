@@ -90,7 +90,7 @@ Open the **Setup** panel (gear icon, top right):
 No real money. Same engine, tape, and bounce zones as live. PnL shown as market-cap % move with an optional SOL estimate.
 
 ### Real
-Requires a PumpPortal API key and a funded trading wallet. Buys and sells via **PumpPortal Lightning** with automatic pool fallback (bonding curve → Raydium). SOL PnL is read from Solana RPC after each trade.
+Requires a PumpPortal API key and a funded trading wallet. Buys and sells via **PumpPortal Lightning** with automatic pool fallback (bonding curve → PumpSwap). SOL PnL is read from Solana RPC after each trade.
 
 ---
 
@@ -140,7 +140,7 @@ Four live feeds of Pump.fun tokens:
 |---|---|
 | New launches | All pre-bond pairs, newest first |
 | Graduating | Pre-bond tokens sorted by bonding-curve progress |
-| Recently bonded | Tokens that graduated to Raydium in the last 2 days |
+| Recently bonded | Tokens that graduated to PumpSwap in the last 2 days |
 | Older revivals | Graduated tokens 2–30 days old, sorted by revival score |
 
 Each token flows into a `DiscoveryBus` backed by IndexedDB. Clicking any token opens its chart.

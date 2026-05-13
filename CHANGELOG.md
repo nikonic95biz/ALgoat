@@ -118,7 +118,7 @@ Three refined classifiers for incoming messages:
 
 ### Real Trading
 
-- **`postPumpPortalLightningTradeWithFallback`** — retries on `pump-amm` → `raydium` for `custom program error: 6005` (bonding curve completed / migrated to Raydium), falls back to `pump` for bonding-only errors. Pre-bond and post-bond coins both work.
+- **`postPumpPortalLightningTradeWithFallback`** — retries on `pump-amm` (PumpSwap) for `custom program error: 6005` (bonding curve completed / migrated to PumpSwap), falls back to `pump` for bonding-only errors. Pre-bond and post-bond coins both work.
 - **`realPositionOpenRef`** — tracks confirmed on-chain buys. Phantom sells (400 Bad Request when no position is open) are now gated on this ref flipping `true` after successful on-chain confirmation.
 - **"Sell All" button** — appears next to "Stop" only when `algoSessionActive && tradingMode === "real" && status === "in_trade"`. Calls `requestManualSell()` → `postPumpPortalLightningTradeWithFallback` → logs PnL → `hardStopTrading`.
 - **PnL tracking tightened** — `fetchWalletSolDeltaSol` uses exponential backoff with up to 12 retry attempts (was 3). Returns `0` instead of `null` if the wallet isn't the signer — ensures every trade row is recorded with no guesswork.
