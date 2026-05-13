@@ -2,21 +2,21 @@
 
 **An open-source, browser-native algo-trading IDE for Solana memecoins.**
 
-SolClaw is a fully client-side trading workstation. No backend, no custody, no accounts. Your keys, wallet secrets, and code never leave your browser. Everything runs on your machine — charting, order-book analysis, algo execution, and an AI assistant that can read live app state and write code directly into your local repo.
+SolClaw is a fully client-side trading workstation. No backend, no accounts, no custody. API keys, wallet secrets, and code never leave the browser. Everything runs locally — charting, live order-book analysis, algo execution, and an AI assistant that can read live app state and write code directly into the repo.
 
 ---
 
-## What it does
+## Features
 
-- **Live chart** — Pump.fun candles (1 s → 15 m) with viewport-triggered lazy loading and auto-refresh. Rendered with `lightweight-charts` v5.
-- **Order-book tape** — Real-time PumpPortal WebSocket stream of buys and sells for any token.
-- **Algo engine** — Built-in order-book scalper (paper and real). Arms on dip + bounce-zone alignment, enters on catalyst buy, exits on take-profit or sell-pressure stop.
-- **Vision bounce zones** — Algo-detected support levels auto-fire on load. AI (LLM vision) analysis is manual-triggered and BETA.
-- **Nursery** — Continuous discovery feed: new Pump.fun launches, graduation candidates, recently bonded tokens, zombie revival candidates.
-- **AI assistant** — Chat with any LLM (Anthropic, OpenAI, Groq, OpenRouter, xAI, Mistral, DeepSeek, Gemini, Ollama). The assistant sees your live trading state and can propose or apply code changes.
-- **In-browser IDE** — Monaco editor + file tree. Connect your local repo folder (File System Access API) and the AI writes code directly to disk. Vite HMR picks it up instantly.
-- **Strategy lab** — Blueprint and preset system for designing, naming, and evolving trading strategies. Paper-test before going live.
-- **Performance history** — Unified real + paper trade log with ROI, entry/exit levels, timestamps, and Solscan links.
+- **Live chart** — Pump.fun candles (1 s → 15 m), viewport-triggered lazy loading, auto-refresh via `lightweight-charts` v5
+- **Order-book tape** — Real-time PumpPortal WebSocket stream of buys and sells for any token
+- **Algo engine** — Built-in order-book scalper (paper and real). Arms on dip + bounce-zone alignment, enters on catalyst buy, exits on take-profit or sell-pressure stop
+- **Vision bounce zones** — Algo-detected support levels fire automatically on chart load; LLM vision analysis is manual-triggered (BETA)
+- **Nursery** — Continuous discovery feed: new Pump.fun launches, graduation candidates, recently bonded tokens, zombie revival candidates
+- **AI assistant** — Chat with any LLM (Anthropic, OpenAI, Groq, OpenRouter, xAI, Mistral, DeepSeek, Gemini, Ollama). The assistant sees live trading state and can propose or apply code changes
+- **In-browser IDE** — Monaco editor + file tree. Connect a local repo folder (File System Access API) and the AI writes code directly to disk; Vite HMR picks it up instantly
+- **Algo Lab** — Blueprint and preset system for designing, naming, and iterating on strategies
+- **Performance history** — Unified real + paper trade log with ROI, entry/exit levels, timestamps, and Solscan links
 
 ---
 
@@ -34,7 +34,7 @@ GitHub REST    →  read/write/fork repo files
 File System API→  local repo edits (instant HMR)
 ```
 
-State: `localStorage` + IndexedDB. No accounts, no sync, no tracking.
+State lives in `localStorage` + IndexedDB. No accounts, no sync, no tracking.
 
 ---
 
@@ -55,90 +55,95 @@ State: `localStorage` + IndexedDB. No accounts, no sync, no tracking.
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/solclaw/solclaw
+git clone https://github.com/Enrichfun/solclaw
 cd solclaw
 npm install
 ```
 
-### 2. Run locally
+### 2. Start the dev server
 
 ```bash
 npm run dev
 ```
 
-`predev` runs `scripts/bundle-workspace.mjs` first, which snapshots your repo into `public/bundled-workspace/` so the in-browser IDE can read files without a GitHub token.
+Vite starts on port 5173 by default. The `predev` script runs `scripts/bundle-workspace.mjs` first, which snapshots the repo into `public/bundled-workspace/` so the in-browser IDE can browse source files without a GitHub token.
 
-Open [http://localhost:5173](http://localhost:5173).
+### 3. Configure (in-app)
 
-### 3. Setup (in-app)
+Open the **Setup** panel (gear icon, top right) and fill in what you need:
 
-Open the **⚙ Setup** panel (top-right gear icon) and configure:
+| Setting | Required for | Notes |
+|---|---|---|
+| **LLM API key** | AI chat + code edits | Paste any key — provider is detected automatically |
+| **PumpPortal API key** | Real trading, live order book | Get one at [pumpportal.fun](https://pumpportal.fun) |
+| **Trading wallet** | Real trade execution | Solana private key, stored in browser only |
+| **GitHub PAT + repo** | Pushing AI code edits to your fork | Personal access token with repo scope |
+| **Local workspace** | Instant disk writes via HMR | Point to the cloned repo folder |
 
-| Step | What to add |
-|---|---|
-| **LLM** | Paste any API key — provider is detected automatically from the key shape |
-| **PumpPortal** | API key from [pumpportal.fun](https://pumpportal.fun) (optional, enables real trading) |
-| **Trading wallet** | Solana private key for real-money execution (stays in browser only) |
-| **GitHub** | PAT + owner/repo for pushing AI code edits to a fork |
-| **Local workspace** | Connect your local SolClaw repo folder for instant disk writes |
+All settings are stored in `localStorage` — nothing is sent anywhere except the respective provider when you use it.
 
 ---
 
 ## Trading modes
 
-### Paper trading
-No real money. Uses the same scalper engine, tape, and bounce zones as real mode. PnL shown as market-cap % move and optional SOL estimate.
+### Paper
+No real money. Same engine, tape, and bounce zones as live. PnL shown as market-cap % move with an optional SOL estimate.
 
-### Real trading
-Requires PumpPortal API key + trading wallet. Buys and sells via **PumpPortal Lightning** with automatic pool fallback (bonding curve → Raydium). SOL PnL parsed from Solana RPC.
+### Real
+Requires a PumpPortal API key and a funded trading wallet. Buys and sells via **PumpPortal Lightning** with automatic pool fallback (bonding curve → Raydium). SOL PnL is read from Solana RPC after each trade.
 
 ---
 
-## AI assistant (chat)
+## AI assistant
 
-The chat panel is a full-context LLM interface. It receives:
-- Live trading state (mint, mode, algo, scalper snapshot, bounce zones)
-- Open file content (if workspace connected)
-- Strategy blueprints and preset knobs
+The chat panel is a full-context LLM interface that receives live trading state (mint, mode, algo, scalper snapshot, bounce zones) and, if a workspace is connected, open file content.
 
-It can respond with:
-- ```` ```typescript:src/path/file.ts ```` blocks → auto-applied to disk in build mode
-- ```` ```config ```` blocks → live knob updates (no redeploy)
-- ```` ```algo ```` blocks → adds a new preset to Algo Lab
-- Follow-up suggestions, blueprint drafts, and trading analysis
+The model can respond with structured blocks:
+
+| Block type | Effect |
+|---|---|
+| ` ```typescript:src/path/file.ts ``` ` | Auto-applied to disk in build mode |
+| ` ```config ``` ` | Live knob update — no redeploy needed |
+| ` ```algo ``` ` | Adds a new preset to Algo Lab |
 
 ### Build mode
-When building, the assistant operates in a strict single-pass pipeline:
-1. Deterministic prefetch of relevant files (list, search, read up to 3 files)
-2. Single LLM call — no open-ended tool loops
-3. Response is validated against a build artifact schema
-4. Valid file edits auto-apply to disk; invalid/truncated responses are blocked
 
-Build flow is managed by an explicit state machine: `chat → build_running → build_verifying → build_done / build_failed`.
+Build mode uses a strict single-pass pipeline — no open-ended tool loops that can exhaust token budgets:
+
+1. Deterministic prefetch of relevant files (`list_files` → `search_code` → `read_file`)
+2. Single LLM call with all context in one shot
+3. Response validated against a build artifact schema
+4. Valid edits auto-applied to disk; truncated or leaky responses are blocked
+
+The build flow is state-machine driven: `chat → build_running → build_verifying → build_done / build_failed`.
 
 ---
 
 ## Algo Lab
 
-Design, parameterise, and iterate on trading strategies:
-- **Blueprint** — goal, market, signals, entry/exit/risk rules, knobs
-- **Preset** — named config snapshot (knobs) for a strategy
-- **Paper test** — run any preset against live tape in paper mode
-- **Performance tab** — review closed trades, win rate, PnL
+| Concept | What it is |
+|---|---|
+| **Blueprint** | Goal, signals, entry/exit/risk rules, and knob definitions for a strategy |
+| **Preset** | A named snapshot of knob values for a given strategy |
+| **Paper test** | Run any preset against the live tape without real money |
+| **Performance tab** | Closed trade history, win rate, PnL |
 
-Built-in strategy: **Order-book scalper**. Register new strategies in `src/lib/strategyRegistry.ts`.
+The only built-in strategy is the **order-book scalper**. New strategies can be registered in `src/lib/strategyRegistry.ts`.
 
 ---
 
 ## Discovery (Nursery)
 
-Four real-time feeds of Pump.fun tokens:
-- **New launches** — all pre-bond pairs, newest first
-- **Graduating** — pre-bond tokens sorted by bonding-curve progress
-- **Recently bonded** — tokens that just graduated to Raydium (< 2 days)
-- **Older revivals** — graduated tokens 2–30 days old sorted by revival score
+Four live feeds of Pump.fun tokens:
 
-Each token flows into `DiscoveryBus` (IndexedDB-backed) with tier scoring. Clicking any token opens its chart. The discovery bus is wired for multi-mint strategy subscriptions — groundwork for auto-discovery algo execution.
+| Feed | What it shows |
+|---|---|
+| New launches | All pre-bond pairs, newest first |
+| Graduating | Pre-bond tokens sorted by bonding-curve progress |
+| Recently bonded | Tokens that graduated to Raydium in the last 2 days |
+| Older revivals | Graduated tokens 2–30 days old, sorted by revival score |
+
+Each token flows into a `DiscoveryBus` backed by IndexedDB. Clicking any token opens its chart.
 
 ---
 
@@ -146,27 +151,30 @@ Each token flows into `DiscoveryBus` (IndexedDB-backed) with tier scoring. Click
 
 ```bash
 npm run build
+# output → dist/
 ```
 
-Output: `dist/`. Deploy to any static host (Netlify, Vercel, GitHub Pages, Cloudflare Pages, etc.).
+Deploy `dist/` to any static host. No server needed.
 
-- Build command: `npm run build`
-- Output directory: `dist`
-- No server required — fully static
+To avoid CORS issues in production, add proxy rewrites for:
+- `/pump-api/*` → `https://swap-api.pump.fun/*`
+- `/pump-frontend/*` → `https://frontend-api.pump.fun/*`
 
-If your host supports rewrite rules, proxy `/pump-api/*` → `https://swap-api.pump.fun/*` and `/pump-frontend/*` → `https://frontend-api.pump.fun/*` to avoid CORS issues in production. See `vercel.json` for a working example.
+`vercel.json` in the repo has a working example of these rewrites.
 
 ---
 
-## Development notes
+## Contributing
 
-### LLM proxy
-In dev, `vite.config.ts` proxies all provider endpoints under `/__proxy/llm/*` so `Authorization` headers reach providers without CORS issues. On deployed builds, requests go directly from the browser — configure CORS in your provider dashboard or use OpenRouter as a proxy.
+### LLM proxy (dev only)
+
+In dev, `vite.config.ts` proxies all LLM provider requests under `/__proxy/llm/*` so `Authorization` headers work without CORS issues. On deployed builds, requests go directly from the browser.
 
 ### Adding a strategy
-1. Add a `StrategyRuntimeDefinition` and `StrategyRuntime` implementation in `src/lib/`
-2. Register it in `STRATEGY_REGISTRY` and `STRATEGY_RUNTIME_REGISTRY` in `src/lib/strategyRegistry.ts`
-3. Wire it in `DashboardSidebar` and `AlgoTabs` alongside the built-in scalper
+
+1. Implement `StrategyRuntime` and define a `StrategyRuntimeDefinition` in `src/lib/`
+2. Register both in `STRATEGY_REGISTRY` and `STRATEGY_RUNTIME_REGISTRY` in `src/lib/strategyRegistry.ts`
+3. Wire the new strategy into `DashboardSidebar` and `AlgoTabs`
 
 ---
 
