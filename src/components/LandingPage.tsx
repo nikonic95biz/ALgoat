@@ -45,7 +45,7 @@ function NavBar({
           className="flex items-center gap-2 font-semibold tracking-tight text-[#eceff4]"
           onClick={(e) => { if (homeHref === window.location.pathname) e.preventDefault(); }}
         >
-          <img src="/solclaw-logo.png" alt="SolClaw" className="h-6 w-6 object-contain" />
+          <img src="/solclaw-logo.png" alt="SolClaw" className="h-7 w-7 rounded-full object-cover" />
           <span className="text-[15px] font-semibold">SolClaw</span>
         </a>
         <div className="flex items-center gap-2">
@@ -78,7 +78,7 @@ function Hero() {
       <div className="grid items-center gap-14 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
         <div>
           <div className="inline-flex items-center gap-2 rounded-full border border-white/[0.1] bg-white/[0.04] px-3.5 py-1.5 text-[12px] font-medium text-[#9aa4b2]">
-            <img src="/solclaw-logo.png" alt="" className="h-3.5 w-3.5 object-contain" />
+            <img src="/solclaw-logo.png" alt="" className="h-3.5 w-3.5 rounded-full object-cover" />
             <span>Now live and open source</span>
           </div>
 
@@ -329,7 +329,7 @@ function Footer({
     <footer className="relative z-10 border-t border-white/[0.05]">
       <div className="mx-auto max-w-5xl px-5 py-16 sm:px-8 sm:py-20">
         <div className="rounded-2xl border border-[#2EA8FF]/15 bg-[linear-gradient(180deg,rgba(46,168,255,0.05),transparent)] p-8 sm:p-10 text-center">
-          <img src="/solclaw-logo.png" alt="SolClaw" className="mx-auto h-12 w-12 object-contain" />
+          <img src="/solclaw-logo.png" alt="SolClaw" className="mx-auto h-14 w-14 rounded-full object-cover ring-2 ring-white/10" />
           <h3 className="mt-4 text-balance text-[1.5rem] font-semibold tracking-tight text-[#eceff4] sm:text-[1.85rem]">
             Open source. Fork it. Make it yours.
           </h3>
@@ -352,7 +352,7 @@ function Footer({
         <div className="mt-10 flex flex-col items-center justify-between gap-4 text-[12px] text-[#3a4050] sm:flex-row">
           <p className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
             <span className="flex items-center gap-1.5">
-              <img src="/solclaw-logo.png" alt="" className="h-3.5 w-3.5 object-contain" /> SolClaw · Open source · MIT · Nothing here is financial advice.
+              <img src="/solclaw-logo.png" alt="" className="h-3.5 w-3.5 rounded-full object-cover" /> SolClaw · Open source · MIT · Nothing here is financial advice.
             </span>
             <a href={changelogHref} className="font-mono text-[#2EA8FF]/80 underline-offset-2 hover:text-[#2EA8FF] hover:underline">
               Release notes (v1.1)
@@ -399,7 +399,7 @@ function ProductMock() {
             <span className="h-2.5 w-2.5 rounded-full bg-[#f5b942]/70" />
             <span className="h-2.5 w-2.5 rounded-full bg-[#2EA8FF]/70" />
           </div>
-          <div className="flex items-center gap-1.5 font-mono text-[10.5px] tracking-[0.05em] text-[#4a5260]"><img src="/solclaw-logo.png" alt="" className="h-3 w-3 object-contain opacity-60" />SolClaw · /app</div>
+          <div className="flex items-center gap-1.5 font-mono text-[10.5px] tracking-[0.05em] text-[#4a5260]"><img src="/solclaw-logo.png" alt="" className="h-3 w-3 rounded-full object-cover opacity-70" />SolClaw · /app</div>
           <div className="flex items-center gap-1.5 text-[#2EA8FF]">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#2EA8FF]" />
             <span className="font-mono text-[10px] tracking-[0.06em]">LIVE</span>
@@ -453,7 +453,7 @@ function ProductMock() {
         </div>
 
         <div className="flex items-center justify-between border-t border-white/[0.05] bg-[#0a0b0e] px-3.5 py-2 font-mono text-[10.5px] text-[#3a4050]">
-          <span className="flex items-center gap-1"><img src="/solclaw-logo.png" alt="" className="h-3 w-3 object-contain opacity-70" />SolClaw</span>
+          <span className="flex items-center gap-1"><img src="/solclaw-logo.png" alt="" className="h-3 w-3 rounded-full object-cover opacity-80" />SolClaw</span>
           <span className="flex items-center gap-1.5 text-[#2EA8FF]/70">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#2EA8FF]/70" />
             <span className="tabular-nums">{String(now % 60).padStart(2, "0")}s ago</span>

@@ -120,8 +120,8 @@ export function ProjectGate({ onReady }: { onReady: (handle: FileSystemDirectory
           <img
             src="/solclaw-logo.png"
             alt=""
-            className="h-10 w-10 object-contain opacity-85"
-            style={{ filter: "drop-shadow(0 0 16px rgba(34,211,238,0.3))", mixBlendMode: "screen" }}
+            className="h-10 w-10 rounded-full object-cover opacity-90"
+            style={{ filter: "drop-shadow(0 0 16px rgba(34,211,238,0.3))" }}
           />
           <h1
             className="text-[28px] font-bold tracking-tight"
