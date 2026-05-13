@@ -242,7 +242,7 @@ function buildBlockedMessage(capability: BuildCapability, hasWorkspace: boolean)
   if (capability !== "blocked") return "";
   return hasWorkspace
     ? "Build is blocked because the local workspace permission is not ready. Reconnect or re-authorize the project folder, then try again."
-    : "Build is blocked because no local workspace folder is connected. Connect the project folder first so SolClaw can read and write files.";
+    : "Build is blocked because no local workspace folder is connected. Connect the project folder first so ALgoat can read and write files.";
 }
 
 function canTransitionBuildFlow(from: BuildFlowState, to: BuildFlowState): boolean {
@@ -1465,7 +1465,7 @@ export function ChatPanel() {
       updateMessage(assistantId, {
         content:
           `Build is not available with ${model.providerLabel || "this model"} yet.\n\n` +
-          "This provider can chat, but SolClaw's autonomous IDE tools are currently wired through Anthropic. Switch to an Anthropic model for file edits, or use Chat mode to keep blueprinting.",
+          "This provider can chat, but ALgoat's autonomous IDE tools are currently wired through Anthropic. Switch to an Anthropic model for file edits, or use Chat mode to keep blueprinting.",
       });
       abortRef.current = null;
       setPending(false);
@@ -1803,7 +1803,7 @@ export function ChatPanel() {
       }
       if (isOpenRouterBaseUrl(model.baseUrl)) {
         headers["Referer"] = import.meta.env.VITE_OPENROUTER_REFERRER || window.location.origin || "http://localhost:5173";
-        headers["X-Title"] = import.meta.env.VITE_OPENROUTER_APP_TITLE || "SolClaw";
+        headers["X-Title"] = import.meta.env.VITE_OPENROUTER_APP_TITLE || "ALgoat";
       }
 
       // 20 s connection timeout — same as Anthropic path

@@ -1,14 +1,14 @@
-# SolClaw
+# ALgoat
 
 **An open-source, browser-native algo-trading IDE for Solana memecoins.**
 
 ---
 
-## What is SolClaw?
+## What is ALgoat?
 
-SolClaw is a tool for people who want to build and run their own trading strategies on Pump.fun — without trusting a platform, signing up for an account, or handing over their keys.
+ALgoat is a tool for people who want to build and run their own trading strategies on Pump.fun — without trusting a platform, signing up for an account, or handing over their keys.
 
-Everything runs in the browser. There is no backend. You bring your own API keys (LLM, PumpPortal, wallet) and the app uses them directly — nothing passes through any SolClaw server. The full source is here to read and verify.
+Everything runs in the browser. There is no backend. You bring your own API keys (LLM, PumpPortal, wallet) and the app uses them directly — nothing passes through any ALgoat server. The full source is here to read and verify.
 
 The core idea is that strategy creation and execution should happen in the same place. You describe what you want in the AI chat, the assistant reads your live trading state, proposes code or config changes, and applies them directly to your local repo. Paper-test first, go live when ready.
 
@@ -32,7 +32,7 @@ Current state: one concrete strategy (order-book scalper), live Pump.fun data, p
 
 ## Privacy
 
-SolClaw is fully open source — read the code in this repository. All keys and secrets are stored only in your browser's `localStorage`. Nothing is sent to any SolClaw-owned server. Your keys go directly to the provider you configured (Anthropic, PumpPortal, Solana RPC, etc.) — straight from your browser.
+ALgoat is fully open source — read the code in this repository. All keys and secrets are stored only in your browser's `localStorage`. Nothing is sent to any ALgoat-owned server. Your keys go directly to the provider you configured (Anthropic, PumpPortal, Solana RPC, etc.) — straight from your browser.
 
 ---
 
@@ -72,7 +72,7 @@ State lives in `localStorage` + IndexedDB. No accounts, no sync, no tracking.
 
 ```bash
 git clone <your-fork-or-clone-url>
-cd solclaw
+cd algoat
 npm install
 ```
 

@@ -55,7 +55,7 @@ export function ReleaseNotesPage({
         </div>
 
         <h1 className="mt-6 text-balance text-[2rem] font-semibold leading-[1.08] tracking-[-0.02em] text-[#f4f6fa] sm:text-[2.35rem]">
-          SolClaw <span className="text-[#2EA8FF]">v1.1</span>
+          ALgoat <span className="text-[#2EA8FF]">v1.1</span>
         </h1>
         <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-[#7a8494]">
           Structured release log for deploy verification and fork maintainers. Scope: chart data pipeline,
@@ -269,7 +269,7 @@ export function ReleaseNotesPage({
           </p>
           <div className="mt-5 flex flex-wrap gap-3">
             <a
-              href={GH || "https://github.com/solclaw/solclaw"}
+              href={GH || "https://github.com/algoat/algoat"}
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center gap-2 rounded-lg bg-[#2EA8FF] px-4 py-2.5 text-[13px] font-semibold text-[#040d18]"

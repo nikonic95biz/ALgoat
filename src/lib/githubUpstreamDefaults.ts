@@ -6,5 +6,5 @@ export function getDefaultGithubUpstream(): { owner: string; repo: string } {
   const o = import.meta.env.VITE_GITHUB_UPSTREAM_OWNER?.trim();
   const r = import.meta.env.VITE_GITHUB_UPSTREAM_REPO?.trim();
   if (o && r) return { owner: o, repo: r };
-  return { owner: "solclaw", repo: "solclaw" };
+  return { owner: "algoat", repo: "algoat" };
 }

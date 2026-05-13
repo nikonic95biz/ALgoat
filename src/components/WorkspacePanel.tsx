@@ -353,7 +353,7 @@ export function WorkspacePanel() {
             <div className="mt-2 space-y-1.5">
               {[
                 { label: "Owner", key: "owner" as const, ph: "your-github-username" },
-                { label: "Repo", key: "repo" as const, ph: "solclaw" },
+                { label: "Repo", key: "repo" as const, ph: "algoat" },
                 { label: "Branch", key: "branch" as const, ph: "main" },
               ].map(({ label, key, ph }) => (
                 <div key={key} className="space-y-0.5">

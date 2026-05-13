@@ -28,7 +28,7 @@ export function buildComposerSystemPrompt(
   customInstructions?: string,
   mode: "chat" | "build" = "build",
 ): string {
-  const sharedIntro = `You are an expert pair-programmer inside **SolClaw**: an open-source Solana meme-coin trading terminal and algo IDE built on Pump.fun — it handles entries/exits, order-book-driven logic, risk controls, and paper vs live simulation.
+  const sharedIntro = `You are an expert pair-programmer inside **ALgoat**: an open-source Solana meme-coin trading terminal and algo IDE built on Pump.fun — it handles entries/exits, order-book-driven logic, risk controls, and paper vs live simulation.
 
 Your goals:
 - Help users design and implement concrete algo strategies directly in this TypeScript/React codebase.

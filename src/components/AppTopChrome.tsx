@@ -27,8 +27,8 @@ export function AppTopChrome() {
         {/* Center wordmark */}
         <div className="min-w-0 flex flex-1 select-none items-center justify-start px-1 text-left sm:justify-center sm:px-4 sm:text-center" style={drag}>
           <span className="inline-flex items-center gap-1.5 truncate text-[13px] font-semibold tracking-[0.02em] text-[color-mix(in_srgb,var(--color-fg)_78%,#2EA8FF_22%)] drop-shadow-[0_0_14px_rgba(46,168,255,0.12)]">
-            <img src="/solclaw-logo.png" alt="" className="h-5 w-5 rounded-full object-cover opacity-90" />
-            SolClaw
+            <img src="/algoat-logo.png" alt="" className="h-5 w-5 rounded-full object-cover opacity-90" />
+            ALgoat
           </span>
         </div>
 

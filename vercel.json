@@ -3,10 +3,10 @@
   "outputDirectory": "dist",
   "framework": "vite",
   "env": {
-    "VITE_BASE_PATH": "solclaw",
-    "VITE_GITHUB_REPO_URL": "https://github.com/solclaw/solclaw",
-    "VITE_GITHUB_UPSTREAM_OWNER": "solclaw",
-    "VITE_GITHUB_UPSTREAM_REPO": "solclaw"
+    "VITE_BASE_PATH": "algoat",
+    "VITE_GITHUB_REPO_URL": "https://github.com/algoat/algoat",
+    "VITE_GITHUB_UPSTREAM_OWNER": "algoat",
+    "VITE_GITHUB_UPSTREAM_REPO": "algoat"
   },
   "rewrites": [
     { "source": "/", "destination": "/index.html" },
@@ -14,8 +14,8 @@
     { "source": "/pump-frontend/:path*", "destination": "https://frontend-api.pump.fun/:path*" },
     { "source": "/dex-api/:path*", "destination": "https://api.dexscreener.com/:path*" },
     { "source": "/sol-rpc", "destination": "https://api.mainnet-beta.solana.com/" },
-    { "source": "/solclaw", "destination": "/solclaw/index.html" },
-    { "source": "/solclaw/(.*)", "destination": "/solclaw/index.html" }
+    { "source": "/algoat", "destination": "/algoat/index.html" },
+    { "source": "/algoat/(.*)", "destination": "/algoat/index.html" }
   ],
   "headers": [
     {

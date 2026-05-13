@@ -1,6 +1,6 @@
 import type { DiscoveryEvent, DiscoverySnapshot, DiscoveryTokenRecord } from "@/lib/discoveryTypes";
 
-const DB_NAME = "solclaw_discovery_v1";
+const DB_NAME = "algoat_discovery_v1";
 const DB_VERSION = 1;
 const TOKENS = "tokens";
 const EVENTS = "events";

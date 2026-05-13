@@ -46,7 +46,7 @@ export function ChatEmptyState({
   return (
     <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-3.5 py-4">
       <div className="space-y-0.5">
-        <p className="text-[12.5px] font-semibold text-[var(--color-fg)]">SolClaw · Algo IDE</p>
+        <p className="text-[12.5px] font-semibold text-[var(--color-fg)]">ALgoat · Algo IDE</p>
         <p className="text-[11px] leading-relaxed text-[var(--color-fg-dim)]">
           Full codebase context on every message — propose changes, apply to disk, tweak trading knobs.
         </p>

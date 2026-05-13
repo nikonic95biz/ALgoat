@@ -62,7 +62,7 @@ export function buildLiveContext(snap: LiveContextSnapshot, options: LiveContext
   }
   lines.push(`- Paper scalper: ${scalperStatus(ca.paperScalper)}`);
   lines.push("");
-  lines.push("## SolClaw app map");
+  lines.push("## ALgoat app map");
   lines.push("- Trading tab: select an algo preset and run named paper/real trading sessions.");
   lines.push("- Algo Lab tab: create, view, delete, edit, and train algo blueprints/presets. Put strategy-specific UI here.");
   lines.push("- Performance tab: inspect saved trading-session files by preset/session and use results to improve algos.");

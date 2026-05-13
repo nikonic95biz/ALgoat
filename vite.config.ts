@@ -476,7 +476,7 @@ function createIdeAgentMiddleware(): Connect.NextHandleFunction {
 function ideAgentPlugin(): Plugin {
   const mw = createIdeAgentMiddleware();
   return {
-    name: "solclaw-local-ide-agent",
+    name: "algoat-local-ide-agent",
     enforce: "pre",
     configureServer(server) {
       server.middlewares.use(mw);

@@ -5,7 +5,7 @@
 export function getBundledProjectKnowledge(): string {
   return `
 ## Product
-SolClaw — browser-based Solana meme-coin trading terminal (Pump.fun). Features: OHLC chart, live order-book tape, paper + real scalper, LLM chat IDE, Nursery scanner. Static Vite+React SPA, no backend. Keys in localStorage.
+ALgoat — browser-based Solana meme-coin trading terminal (Pump.fun). Features: OHLC chart, live order-book tape, paper + real scalper, LLM chat IDE, Nursery scanner. Static Vite+React SPA, no backend. Keys in localStorage.
 
 ## Dev
 \`npm run dev\` → http://localhost:5173  |  \`npm run build\` → dist/

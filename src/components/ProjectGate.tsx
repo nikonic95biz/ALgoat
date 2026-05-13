@@ -72,7 +72,7 @@ export function ProjectGate({ onReady }: { onReady: (handle: FileSystemDirectory
       onReady(savedHandle);
     } else {
       setStatus("idle");
-      setErrorMsg("Folder no longer looks like a SolClaw project.");
+      setErrorMsg("Folder no longer looks like an ALgoat project.");
     }
   }
 
@@ -88,7 +88,7 @@ export function ProjectGate({ onReady }: { onReady: (handle: FileSystemDirectory
       const valid = await validateFolder(handle);
       if (!valid) {
         setStatus(savedHandle ? "resume" : "idle");
-        setErrorMsg("Not a SolClaw project - pick the root of your cloned repo.");
+        setErrorMsg("Not an ALgoat project - pick the root of your cloned repo.");
         return;
       }
       await persistHandle(handle);
@@ -118,7 +118,7 @@ export function ProjectGate({ onReady }: { onReady: (handle: FileSystemDirectory
       <div className="relative z-10 flex flex-col items-center gap-8">
         <div className="flex flex-col items-center gap-2">
           <img
-            src="/solclaw-logo.png"
+            src="/algoat-logo.png"
             alt=""
             className="h-10 w-10 rounded-full object-cover opacity-90"
             style={{ filter: "drop-shadow(0 0 16px rgba(34,211,238,0.3))" }}
@@ -131,7 +131,7 @@ export function ProjectGate({ onReady }: { onReady: (handle: FileSystemDirectory
               WebkitTextFillColor: "transparent",
             }}
           >
-            SolClaw
+            ALgoat
           </h1>
         </div>
 
@@ -190,7 +190,7 @@ export function ProjectGate({ onReady }: { onReady: (handle: FileSystemDirectory
               </p>
             ) : status !== "resume" ? (
               <p className="text-center text-[11px] text-[rgba(255,255,255,0.18)]">
-                Select your local SolClaw repo folder
+                Select your local ALgoat repo folder
               </p>
             ) : null}
           </div>
